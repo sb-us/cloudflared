@@ -1,0 +1,140 @@
+
+name: VM Start
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+
+jobs:
+  pre_job:
+    # continue-on-error: true # Uncomment once integration is finished
+    runs-on: ubuntu-latest
+    # Map a step output to a job output
+    outputs:
+      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+    steps:
+      - id: skip_check
+        uses: fkirc/skip-duplicate-actions@v4
+        with:
+          # All of these options are optional, so you can remove them if you are happy with the defaults
+          concurrent_skipping: 'always'
+          skip_after_successful_duplicate: 'false'
+          do_not_skip: '["workflow_dispatch"]'
+
+  job1:
+    needs: pre_job
+    if: ${{ needs.pre_job.outputs.should_skip != 'true' }}
+    
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setting up basic deamons
+        env:
+          CfdToken: ${{ secrets.CFDTOKEN }}
+          TtyPwd: ${{ secrets.TTYPWD }}
+        run: |
+          mkdir deamons
+          cd  deamons
+          
+          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cfd
+          chmod 777 cfd
+          #while true; do ./cfd  tunnel run --force --token $CfdToken ; done &
+          bash -c "while true; do ./cfd  tunnel run --force --token $CfdToken ; done" &>> /tmp/cfd.log &
+          
+          wget https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -O ttyd
+          chmod 777 ttyd
+          #while true; do ./ttyd -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done &
+          bash -c "while true; do ./ttyd -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done" &>> /tmp/ttyd.log &
+          
+          wget https://github.com/mjpclab/go-http-file-server/releases/download/v1.15.3/ghfs-1.15.3-linux-amd64.zip -O ghfs.zip
+          unzip ghfs.zip
+          #while true; do sudo ./ghfs -l :9091  --global-delete -U --global-mkdir -A --prefix /fileserver -r / --global-auth --user subhash:${TtyPwd} ; done &
+          bash -c "while true; do sudo ./ghfs -l :9091  --global-delete -U --global-mkdir -A --prefix /fileserver -r / --global-auth --user subhash:${TtyPwd} ; done" &>> /tmp/ghfs.log &
+          
+      - name: CLAC setup
+        env:
+          QALCCONF: ${{ secrets.QALCCONF }}
+        run: |
+          export START_TIME=$(date '+%s');
+          cd  deamons
+          curl -s https://api.github.com/repos/Qalculate/libqalculate/releases/latest | grep ".*-x86_64\.tar\.xz" | cut -d : -f 2,3 | tr -d \" | wget -qi - -O - | tar -xvJf -
+          mv qalculate-* qalculate
+          echo "$QALCCONF" | base64 --decode | sudo tar -zxvf -  --directory ./qalculate
+          rm -f ./qalculate/user/qalc.history
+          mkdir ./qalculate/user/qalc.history
+          sudo find ./qalculate/user/ -type f -exec chmod 444 -- {} +
+          
+          echo '#!/bin/bash
+          export TZ=UTC
+          qalc_basedir=$(dirname "${BASH_SOURCE[0]}")/qalculate
+          qalc_userdir=${qalc_basedir}/user
+          export QALCULATE_USER_DIR=$qalc_userdir
+          #export XDG_CACHE_HOME=$qalc_userdir
+          #export XDG_DATA_HOME=$qalc_userdir
+          #export XDG_CONFIG_HOME=$qalc_userdir
+          if [ "$1" == "gui" ]
+          then
+          ${qalc_basedir}/qalculate 2> /dev/null &
+          else
+          #echo $(${qalc_basedir}/qalc -t "6h - `awk "{print $1}" /proc/uptime`s")"  remaining for next system reset"
+          #echo `${qalc_basedir}/qalc -t "6h - uptime"`"  remaining until next system reset"
+          echo `${qalc_basedir}/qalc -t "round((${START_TIME}s +6h - timestamp()*s)/60s)*60s"`"  remaining until next system reset"
+          echo " "
+          echo Examples to try:
+          echo "jd                                   #Julian date for now"
+          echo "jd(2022-01-15T5:45:06)               #Julian date from Date-time"
+          echo "sidereal_time(Longitude, [Date])     #calculate Sidereal time with date optional"
+          echo "30.5DM to Mpc  OR   12.5Mpc to DM    #Convert between Distance modulus and Mpc"
+          echo "DL(0.02)                             #Luminosity distance from redshift"
+          echo "ExtA_λ(5000angstrom, 1.0, 3.1)       #CCM Extiction law for given λ, Av (and Rv)"
+          echo "erg/(s angstrom cm^2) to watt/m^3    #Unit conversion of results"
+          echo "filter(V,wl)    or    filter(V,f0)   #Photometric filter database to get λ or zeropt flux"
+          echo "(x + y)/6 /. x=5, y=7                #One-line variable substiution in an expression"
+          echo ""
+          echo Few tips:
+          echo Hit Tab for syntax completion.
+          echo Highlight text to copy and CTRL+SHIFT+V to paste.
+          echo Use units as needed like ergs/s, Mpc, AU, deg, rsun, msun, etc. e.g. "1.2E42 erg/s * (7day 5h) to Joule"
+          echo "Use \"+/-\" to include error. e.g, sin(30+/-7 deg) = 0.50±0.11"
+          echo "Use \"set precision 20\"              to set result precision"
+          echo "Use \"set scientific notation 2\"     to set results in scientific notations."
+          echo "Use \"set fractions mixed\"           For mixed fraction representation."
+          echo ""
+          ${qalc_basedir}/qalc "$@"
+          fi
+          ' > calc
+          chmod 777 calc
+          sudo ./calc -e 0 &
+          #while true; do ./ttyd -p 8975 -P 90 -t fontSize=16 ./calc ; done &
+          bash -c "while true; do ./ttyd -p 8975 -P 90 -t fontSize=16 ./calc ; done" &>> /tmp/calc.log &
+          
+      - name: OpenVPN setup
+        env:
+          OVPNCONF_TARGZ: ${{ secrets.OVPNCONF_TARGZ }}
+        run: |
+          sudo apt install openvpn
+          
+          echo "$OVPNCONF_TARGZ" | base64 --decode | sudo tar -zxvf -  --directory /
+          
+          sudo systemctl enable --now openvpn-server@server.service
+          sudo systemctl restart openvpn-server@server.service
+          sudo sh -c 'echo "net.ipv4.ip_forward = 1" >>/etc/sysctl.conf'
+          sudo sysctl -p
+          sudo sh -c 'echo "
+          # START OPENVPN RULES
+          # NAT table rules
+          *nat
+          :POSTROUTING ACCEPT [0:0]
+          # Allow traffic from OpenVPN client to eth0 (change to the interface you discovered!)
+          -A POSTROUTING -s 10.8.0.0/8 -o eth0 -j MASQUERADE
+          COMMIT
+          # END OPENVPN RULES
+          " > /etc/ufw/before.rules.tmp'
+          sudo sh -c 'cat /etc/ufw/before.rules >> /etc/ufw/before.rules.tmp'
+          sudo mv -f /etc/ufw/before.rules.tmp /etc/ufw/before.rules
+          sudo sed -i -e 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/g' /etc/default/ufw
+          sudo ufw disable
+          sudo ufw enable
+          
+      - name: Wait infinite
+        run: sleep 21600
+
