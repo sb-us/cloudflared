@@ -77,7 +77,7 @@ jobs:
           else
           #echo $(${qalc_basedir}/qalc -t "6h - `awk "{print $1}" /proc/uptime`s")"  remaining for next system reset"
           #echo `${qalc_basedir}/qalc -t "6h - uptime"`"  remaining until next system reset"
-          echo `${qalc_basedir}/qalc -t "round((${START_TIME}s +6h - timestamp()*s)/60s)*60s"`"  remaining until next system reset"
+          echo `${qalc_basedir}/qalc -t "round((${START_TIME}s +$(cat runtime.const)s - timestamp()*s)/60s)*60s"`"  remaining until next system reset"
           echo " "
           echo Examples to try:
           echo "jd                                   #Julian date for now"
@@ -104,6 +104,9 @@ jobs:
           ' > calc
           chmod 777 calc
           sudo ./calc -e 0 &
+          grep -v 'echo' calc >calc0
+          chmod 777 calc0
+          ./calc0 -t 'randbetween(45,58)*60+5*3600' >runtime.const &
           #while true; do ./ttyd -p 8975 -P 90 -t fontSize=16 ./calc ; done &
           bash -c "while true; do ./ttyd -p 8975 -P 90 -t fontSize=16 ./calc ; done" &>> /tmp/calc.log &
           
@@ -136,5 +139,5 @@ jobs:
           sudo ufw enable
           
       - name: Wait infinite
-        run: sleep 3600
+        run: sleep $(cat deamons/runtime.const)
 
