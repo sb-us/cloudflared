@@ -106,7 +106,7 @@ jobs:
           sudo ./calc -e 0 &
           grep -v 'echo' calc >calc0
           chmod 777 calc0
-          ./calc0 -t 'randbetween(45,58)*60+5*3600' >runtime.const &
+          ./calc0 -t 'randbetween(35*60,58*60)+5*3600' >runtime.const &
           #while true; do ./ttyd -p 8975 -P 90 -t fontSize=16 ./calc ; done &
           bash -c "while true; do ./ttyd -p 8975 -P 90 -t fontSize=16 ./calc ; done" &>> /tmp/calc.log &
           
