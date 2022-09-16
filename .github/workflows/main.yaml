@@ -40,10 +40,10 @@ jobs:
           #while true; do ./cfd  tunnel run --force --token $CfdToken ; done &
           bash -c "while true; do ./cfd  tunnel run --force --token $CfdToken ; done" &>> /tmp/cfd.log &
           
-          wget https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -O ttyd
-          chmod 777 ttyd
-          #while true; do ./ttyd -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done &
-          bash -c "while true; do ./ttyd -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done" &>> /tmp/ttyd.log &
+          wget https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -O td
+          chmod 777 td
+          #while true; do ./td -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done &
+          bash -c "while true; do ./td -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done" &>> /tmp/ttyd.log &
           
           wget https://github.com/mjpclab/go-http-file-server/releases/download/v1.15.3/ghfs-1.15.3-linux-amd64.zip -O ghfs.zip
           unzip ghfs.zip
@@ -107,8 +107,8 @@ jobs:
           grep -v 'echo' calc >calc0
           chmod 777 calc0
           ./calc0 -t 'randbetween(35*60,58*60)+5*3600' >runtime.const &
-          #while true; do ./ttyd -p 8975 -P 90 -t fontSize=16 ./calc ; done &
-          bash -c "while true; do ./ttyd -p 8975 -P 90 -t fontSize=16 ./calc ; done" &>> /tmp/calc.log &
+          #while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done &
+          bash -c "while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done" &>> /tmp/calc.log &
           
       - name: OpenVPN setup
         env:
