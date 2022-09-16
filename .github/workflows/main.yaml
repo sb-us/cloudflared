@@ -140,7 +140,6 @@ jobs:
           
       - name: Wait infinite
         run: |
-          ps -ax | grep "php" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           sleep $(cat deamons/runtime.const)
           ps -ax | grep "bash -c while" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./td" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
