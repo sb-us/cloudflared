@@ -142,7 +142,7 @@ jobs:
         run: |
           sleep $(cat deamons/runtime.const)
           ps -ax | grep "bash -c while" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
-          ps -ax | grep "\./td" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./cfd" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
+          ps -ax | grep "\./td" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./ghfs" | grep -v "grep" | awk '{print $1}' | xargs -n1 sudo kill || echo ''
 
