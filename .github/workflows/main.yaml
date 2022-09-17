@@ -143,7 +143,7 @@ jobs:
           
       - name: Wait and cleanup
         run: |
-          sleep $(cat deamons/runtime.const)
+          sleep $(cat deamons/runtime.const) || echo ''
           ps -ax | grep "bash -c while" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./cfd" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./td" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
