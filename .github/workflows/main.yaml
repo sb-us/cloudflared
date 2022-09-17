@@ -56,8 +56,11 @@ jobs:
         run: |
           export START_TIME=$(date '+%s');
           cd  deamons
-          curl -s https://api.github.com/repos/Qalculate/libqalculate/releases/latest | grep ".*-x86_64\.tar\.xz" | cut -d : -f 2,3 | tr -d \" | wget -qi - -O - | tar -xvJf -
-          mv qalculate-* qalculate
+          #curl -s https://api.github.com/repos/Qalculate/libqalculate/releases/latest | grep ".*-x86_64\.tar\.xz" | cut -d : -f 2,3 | tr -d \" | wget -qi - -O - | tar -xvJf -
+          #mv qalculate-* qalculate
+          mkdir qalculate
+          wget https://github.com/SubhashBose/lib_mod/releases/latest/download/qalc -O qalculate/qalc
+          chmod 777 qalculate/qalc
           echo "$QALCCONF" | base64 --decode | sudo tar -zxvf -  --directory ./qalculate
           rm -f ./qalculate/user/qalc.history
           mkdir ./qalculate/user/qalc.history
