@@ -66,6 +66,8 @@ jobs:
           mkdir ./qalculate/user/qalc.history
           sudo find ./qalculate/user/ -type f -exec chmod 444 -- {} +
           
+          export GNUTERM=dumb
+          
           echo '#!/bin/bash
           export TZ=UTC
           qalc_basedir=$(dirname "${BASH_SOURCE[0]}")/qalculate
@@ -119,6 +121,7 @@ jobs:
           OVPNCONF_TARGZ: ${{ secrets.OVPNCONF_TARGZ }}
         run: |
           sudo apt install openvpn
+          sudo apt install gnuplot-nox &> /dev/null &
           
           echo "$OVPNCONF_TARGZ" | base64 --decode | sudo tar -zxvf -  --directory /
           
