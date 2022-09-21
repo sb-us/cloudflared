@@ -113,10 +113,6 @@ jobs:
           chmod 777 calc0
           ./calc0 -t 'randbetween(35*60,58*60)+5*3600' >runtime.const &
           
-          #sudo ./calc0 <<EOF
-          #save(0, command(), 'del')
-          #save definitions
-          #EOF 
           sudo ./calc0 -t <<EOF
           save(0, command(), 'del')
           save definitions
