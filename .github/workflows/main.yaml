@@ -115,6 +115,7 @@ jobs:
           
           bash -c "sudo ./calc0 -t <<EOF
           save(0, command(), 'del')
+          save(0, load(), 'del')
           save definitions
           EOF" &
           
