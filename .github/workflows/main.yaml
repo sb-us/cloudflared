@@ -112,6 +112,12 @@ jobs:
           grep -v 'echo' calc >calc0
           chmod 777 calc0
           ./calc0 -t 'randbetween(35*60,58*60)+5*3600' >runtime.const &
+          
+          sudo ./calc0 <<EOF
+          save(0, command(), 'del')
+          save definitions
+          EOF > /dev/null &
+          
           #while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done &
           bash -c "while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done" &>> /tmp/calc.log &
           echo 'echo `"'$(readlink -f .)'/calc0" -t "round(('${START_TIME}'s +$(cat "'$(readlink -f .)'/runtime.const")s - timestamp()*s)/60s)*60s"`"  remaining until next system reset"' >> ~/.bashrc
