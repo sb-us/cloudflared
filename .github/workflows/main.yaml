@@ -117,6 +117,10 @@ jobs:
           #save(0, command(), 'del')
           #save definitions
           #EOF 
+          sudo ./calc0 -t <<EOF
+          save(0, command(), 'del')
+          save definitions
+          EOF
           
           #while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done &
           bash -c "while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done" &>> /tmp/calc.log &
