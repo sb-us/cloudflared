@@ -104,7 +104,7 @@ jobs:
           echo "Use \"set scientific notation 2\"     to set results in scientific notations."
           echo "Use \"set fractions mixed\"           For mixed fraction representation."
           echo ""
-          ${qalc_basedir}/qalc "$@"
+          ${qalc_basedir}/qalc "$@" 2> /dev/null
           fi
           ' > calc
           chmod 777 calc
