@@ -165,9 +165,10 @@ jobs:
         env:
           WH: ${{ secrets.WEBHOOK }}
         run: |
-          sleep $(( $(cat deamons/runtime.const) - 180 )) || echo ''
+          sleep $(( $(cat deamons/runtime.const) - 120 )) || echo ''
           sudo find /dev/pts/ -type c -name "[0-9]*" -exec bash -c 'echo -e "\n\e[1;92mNotice: System is going to reset in 3 minutes.\e[0m" > {}' \;
-          sleep 180 || echo ''
+          sleep 120 || echo ''
+          sudo find /dev/pts/ -type c -name "[0-9]*" -exec bash -c 'echo -e "\nSystem resetting now. Try reconnecting after 15 seconds." > {}' \;
           ps -ax | grep "bash -c while" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./cfd" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./td" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
