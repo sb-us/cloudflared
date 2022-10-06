@@ -111,7 +111,7 @@ jobs:
           grep -v 'echo' calc >calc0
           chmod 777 calc0
           sudo ./calc0 -e 0 &
-          ./calc0 -t 'randbetween(35*60,58*60)+5*3600' >runtime.const &
+          ./calc0 -t 'randbetween(32*60,55*60)+5*3600' >runtime.const &
           
           sudo ./calc0 -t <<EOF &
           save(0, command(), 'del')
@@ -166,6 +166,8 @@ jobs:
           WH: ${{ secrets.WEBHOOK }}
         run: |
           sleep $(cat deamons/runtime.const) || echo ''
+          sudo find /dev/pts/ -type c -name "[0-9]*" -exec bash -c 'echo -e "\nNote: System is going to reset in 3 minutes." > {}' \;
+          sleep 180 || echo ''
           ps -ax | grep "bash -c while" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./cfd" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./td" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
