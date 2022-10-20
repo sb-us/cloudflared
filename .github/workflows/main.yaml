@@ -66,7 +66,7 @@ jobs:
           mkdir ./qalculate/user/qalc.history
           sudo find ./qalculate/user/ -type f -exec chmod 444 -- {} +
           
-          export GNUTERM=dumb
+          export GNUTERM=sixelgd
           
           echo '#!/bin/bash
           export TZ=UTC
