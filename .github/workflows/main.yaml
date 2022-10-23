@@ -67,6 +67,7 @@ jobs:
           sudo find ./qalculate/user/ -type f -exec chmod 444 -- {} +
           
           export GNUTERM=sixelgd
+          export LANG="en_US.utf8"
           
           echo '#!/bin/bash
           export TZ=UTC
