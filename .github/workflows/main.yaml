@@ -83,7 +83,9 @@ jobs:
           else
           #echo $(${qalc_basedir}/qalc -t "6h - `awk "{print $1}" /proc/uptime`s")"  remaining for next system reset"
           #echo `${qalc_basedir}/qalc -t "6h - uptime"`"  remaining until next system reset"
-          echo `${qalc_basedir}/qalc -t "round((${START_TIME}s +$(cat runtime.const)s - timestamp()*s)/60s)*60s"`"  remaining until next system reset. Visit homepage: https://astro.subhashbose.com/tools/calculator"
+          echo `${qalc_basedir}/qalc -t "round((${START_TIME}s +$(cat runtime.const)s - timestamp()*s)/60s)*60s"`"  remaining until next system reset."
+          echo ""
+          ecjo "Visit homepage: https://astro.subhashbose.com/tools/calculator"
           echo ""
           echo Examples to try:
           echo "jd                                   #Julian date for now"
