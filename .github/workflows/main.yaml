@@ -83,8 +83,8 @@ jobs:
           else
           #echo $(${qalc_basedir}/qalc -t "6h - `awk "{print $1}" /proc/uptime`s")"  remaining for next system reset"
           #echo `${qalc_basedir}/qalc -t "6h - uptime"`"  remaining until next system reset"
-          echo `${qalc_basedir}/qalc -t "round((${START_TIME}s +$(cat runtime.const)s - timestamp()*s)/60s)*60s"`"  remaining until next system reset"
-          echo " "
+          echo `${qalc_basedir}/qalc -t "round((${START_TIME}s +$(cat runtime.const)s - timestamp()*s)/60s)*60s"`"  remaining until next system reset. Visit homepage: https://astro.subhashbose.com/tools/calculator"
+          echo ""
           echo Examples to try:
           echo "jd                                   #Julian date for now"
           echo "jd(2022-01-15T5:45:06)               #Julian date from Date-time"
@@ -121,7 +121,7 @@ jobs:
           EOF
           
           #while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done &
-          bash -c "while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done" &>> /tmp/calc.log &
+          bash -c "while true; do ./td -p 8975 -P 90 -t fontSize=16 -t disableResizeOverlay=true -t titleFixed=Calculator ./calc ; done" &>> /tmp/calc.log &
           echo 'echo `"'$(readlink -f .)'/calc0" -t "round(('${START_TIME}'s +$(cat "'$(readlink -f .)'/runtime.const")s - timestamp()*s)/60s)*60s"`"  remaining until next system reset"' >> ~/.bashrc
           
       - name: OpenVPN setup
