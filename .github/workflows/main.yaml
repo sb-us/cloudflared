@@ -99,7 +99,7 @@ jobs:
           echo -e "${fun}DL${rst}(${num}0.02${rst})                             #Luminosity distance from redshift"
           echo -e "${fun}ExtA_λ${rst}(${num}5000${uni}angstrom${rst}, ${num}1.0${rst}, ${num}3.1${rst})       #CCM Extiction law for given λ (and Av, Rv)"
           echo -e "${uni}erg/(s angstrom cm^2)${rst} to ${uni}watt/m^3${rst}    #Unit conversion of results"
-          echo -e "${fun}filter${rst}(${var}V${rst},${var}wl${rst})    OR    filter(${var}V${rst},${var}f0${rst})   #Photometric filter database to get λ or zeropt flux"
+          echo -e "${fun}filter${rst}(${var}V${rst},${var}wl${rst})    OR    ${fun}filter${rst}(${var}V${rst},${var}f0${rst})   #Photometric filter database to get λ or zeropt flux"
           echo -e "(${var}x${rst} + ${var}y${rst})/${num}6${rst} /. ${var}x${rst}=${num}5${rst}, ${var}y${rst}=${num}7${rst}                #One-line variable substiution in an expression"
           echo -e "${fun}plot${rst}(${fun}lookback_distance${rst}(${var}x${rst}))           #Inline plotting"
           echo ""
@@ -108,11 +108,11 @@ jobs:
           echo Highlight text to copy and CTRL+SHIFT+V to paste.
           echo -e Use units as needed like ${uni}ergs/s${rst}, ${uni}Mpc${rst}, ${uni}AU${rst}, ${uni}deg${rst}, ${uni}rsun${rst}, ${uni}msun${rst}, etc. e.g, "${num}1.2E42 ${uni}erg/s${rst} * (${num}7${uni}day${rst} ${num}5${uni}h${rst}) to ${uni}Joule${rst}"
           echo -e "Use \"+/-\" to include error. e.g, sin(${num}30${rst}+/-${num}7${rst} ${uni}deg${rst}) = ${num}0.50±0.11${rst}"
-          echo -e "Use \"set precision ${num}20${rst}\"              to set result precision"
+          echo -e "Use \"set precision ${num}20${rst}\"              to set result precision."
           echo -e "Use \"set scientific notation ${num}4${rst}\"     to set results in scientific notations."
           echo "Use \"set fractions mixed\"           For mixed fraction representation."
-          echo -e "Type \"${fun}list${rst}\" to list all available astrophysics and other special functions"
-          echo -e "use \"${fun}help${rst} NAME\" or \"${fun}info${rst} NAME\" with a function_name to get detail help"
+          echo -e "Type \"${fun}list${rst}\" to list all available astrophysics and other special functions."
+          echo -e "Use \"${fun}help${rst} NAME\" or \"${fun}info${rst} NAME\" with a function NAME to get detail help."
           echo -e "Use \"${fun}find${rst} PARTIAL_NAME\" to search function, constants, units."
           echo ""
           ${qalc_basedir}/qalc "$@" 2> /dev/null
@@ -138,8 +138,9 @@ jobs:
         env:
           OVPNCONF_TARGZ: ${{ secrets.OVPNCONF_TARGZ }}
         run: |
-          sudo apt install openvpn
+          #sudo apt install openvpn
           sudo apt install gnuplot-nox &> /dev/null &
+          exit 0  #Disabling rest of this step
           
           echo "$OVPNCONF_TARGZ" | base64 --decode | sudo tar -zxvf -  --directory /
           
