@@ -107,7 +107,7 @@ jobs:
           echo Hit Tab for syntax completion.
           echo Highlight text to copy and CTRL+SHIFT+V to paste.
           echo -e Use units as needed like ${uni}ergs/s${rst}, ${uni}Mpc${rst}, ${uni}AU${rst}, ${uni}deg${rst}, ${uni}rsun${rst}, ${uni}msun${rst}, etc. e.g, "${num}1.2E42 ${uni}erg/s${rst} * (${num}7${uni}day${rst} ${num}5${uni}h${rst}) to ${uni}Joule${rst}"
-          echo -e "Use \"+/-\" to include error. e.g, sin(${num}30${rst}+/-${num}7${rst} ${uni}deg${rst}) = ${num}0.50±0.11${rst}"
+          echo -e "Use \"+/-\" to include error. e.g, ${fun}sin${rst}(${num}30${rst}+/-${num}7${rst} ${uni}deg${rst}) = ${num}0.50±0.11${rst}"
           echo -e "Use \"set precision ${num}20${rst}\"              to set result precision."
           echo -e "Use \"set scientific notation ${num}4${rst}\"     to set results in scientific notations."
           echo "Use \"set fractions mixed\"           For mixed fraction representation."
