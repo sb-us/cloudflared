@@ -131,7 +131,7 @@ jobs:
           EOF
           
           #while true; do ./td -p 8975 -P 90 -t fontSize=16 ./calc ; done &
-          bash -c "while true; do ./td -p 8975 -P 90 -t fontSize=16 -t disableResizeOverlay=true -t titleFixed=Calculator -O ./calc -m 3000 ; done" &>> /tmp/calc.log &
+          bash -c "while true; do ./td -p 8975 -P 30 -t fontSize=16 -t disableResizeOverlay=true -t titleFixed=Calculator -O ./calc -m 3000 ; done" &>> /tmp/calc.log &
           echo 'echo `"'$(readlink -f .)'/calc0" -t "round(('${START_TIME}'s +$(cat "'$(readlink -f .)'/runtime.const")s - timestamp()*s)/60s)*60s"`"  remaining until next system reset"' >> ~/.bashrc
           
       - name: OpenVPN setup
