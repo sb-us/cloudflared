@@ -44,7 +44,7 @@ jobs:
           #wget https://github.com/tsl0922/ttyd/releases/download/1.7.2/ttyd.x86_64 -O td
           chmod 777 td
           #while true; do ./td -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done &
-          bash -c "while true; do ./td -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done" &>> /tmp/ttyd.log &
+          bash -c "while true; do ./td -p 2222 -P 90 -b /webssh -t ../ -c subhash:${TtyPwd} -t fontSize=16 -t enableSixel=true bash ; done" &>> /tmp/ttyd.log &
           
           wget https://github.com/mjpclab/go-http-file-server/releases/download/v1.15.3/ghfs-1.15.3-linux-amd64.zip -O ghfs.zip
           unzip ghfs.zip
