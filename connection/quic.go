@@ -60,12 +60,14 @@ type QUICConnection struct {
 	packetRouter         *ingress.PacketRouter
 	controlStreamHandler ControlStreamHandler
 	connOptions          *tunnelpogs.ConnectionOptions
+	connIndex            uint8
 }
 
 // NewQUICConnection returns a new instance of QUICConnection.
 func NewQUICConnection(
 	quicConfig *quic.Config,
 	edgeAddr net.Addr,
+	localAddr net.IP,
 	connIndex uint8,
 	tlsConfig *tls.Config,
 	orchestrator Orchestrator,
@@ -74,7 +76,7 @@ func NewQUICConnection(
 	logger *zerolog.Logger,
 	packetRouterConfig *ingress.GlobalRouterConfig,
 ) (*QUICConnection, error) {
-	udpConn, err := createUDPConnForConnIndex(connIndex, logger)
+	udpConn, err := createUDPConnForConnIndex(connIndex, localAddr, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +108,7 @@ func NewQUICConnection(
 		packetRouter:         packetRouter,
 		controlStreamHandler: controlStreamHandler,
 		connOptions:          connOptions,
+		connIndex:            connIndex,
 	}, nil
 }
 
@@ -258,7 +261,7 @@ func (q *QUICConnection) dispatchRequest(ctx context.Context, stream *quicpogs.R
 
 	switch request.Type {
 	case quicpogs.ConnectionTypeHTTP, quicpogs.ConnectionTypeWebsocket:
-		tracedReq, err := buildHTTPRequest(ctx, request, stream, q.logger)
+		tracedReq, err := buildHTTPRequest(ctx, request, stream, q.connIndex, q.logger)
 		if err != nil {
 			return err, false
 		}
@@ -272,6 +275,7 @@ func (q *QUICConnection) dispatchRequest(ctx context.Context, stream *quicpogs.R
 			Dest:      request.Dest,
 			FlowID:    metadata[QUICMetadataFlowID],
 			CfTraceID: metadata[tracing.TracerContextName],
+			ConnIndex: q.connIndex,
 		}), rwa.connectResponseSent
 	default:
 		return errors.Errorf("unsupported error type: %s", request.Type), false
@@ -435,6 +439,7 @@ func buildHTTPRequest(
 	ctx context.Context,
 	connectRequest *quicpogs.ConnectRequest,
 	body io.ReadCloser,
+	connIndex uint8,
 	log *zerolog.Logger,
 ) (*tracing.TracedHTTPRequest, error) {
 	metadata := connectRequest.MetadataMap()
@@ -478,7 +483,7 @@ func buildHTTPRequest(
 	stripWebsocketUpgradeHeader(req)
 
 	// Check for tracing on request
-	tracedReq := tracing.NewTracedHTTPRequest(req, log)
+	tracedReq := tracing.NewTracedHTTPRequest(req, connIndex, log)
 	return tracedReq, err
 }
 
@@ -559,13 +564,17 @@ func (rp *muxerWrapper) Close() error {
 	return nil
 }
 
-func createUDPConnForConnIndex(connIndex uint8, logger *zerolog.Logger) (*net.UDPConn, error) {
+func createUDPConnForConnIndex(connIndex uint8, localIP net.IP, logger *zerolog.Logger) (*net.UDPConn, error) {
 	portMapMutex.Lock()
 	defer portMapMutex.Unlock()
 
+	if localIP == nil {
+		localIP = net.IPv4zero
+	}
+
 	// if port was not set yet, it will be zero, so bind will randomly allocate one.
 	if port, ok := portForConnIndex[connIndex]; ok {
-		udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: port})
+		udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localIP, Port: port})
 		// if there wasn't an error, or if port was 0 (independently of error or not, just return)
 		if err == nil {
 			return udpConn, nil
@@ -575,7 +584,7 @@ func createUDPConnForConnIndex(connIndex uint8, logger *zerolog.Logger) (*net.UD
 	}
 
 	// if we reached here, then there was an error or port as not been allocated it.
-	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localIP, Port: 0})
 	if err == nil {
 		udpAddr, ok := (udpConn.LocalAddr()).(*net.UDPAddr)
 		if !ok {
