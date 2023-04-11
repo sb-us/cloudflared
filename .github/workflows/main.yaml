@@ -39,8 +39,7 @@ jobs:
           wget https://github.com/cloudflare/cloudflared/releases/download/2023.3.1/cloudflared-linux-amd64 -O cfd
           chmod 777 cfd
           #while true; do ./cfd  tunnel run --force --token $CfdToken ; done &
-          ./cfd  tunnel --no-autoupdate run --force --token $CfdToken
-          bash -c "while true; do ./cfd  tunnel run --force --token $CfdToken ; done" &>> /tmp/cfd.log &
+          bash -c "while true; do ./cfd  tunnel --no-autoupdate run --force --token $CfdToken ; done" &>> /tmp/cfd.log &
           
           wget https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -O td
           #wget https://github.com/tsl0922/ttyd/releases/download/1.7.2/ttyd.x86_64 -O td
