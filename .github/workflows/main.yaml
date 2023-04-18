@@ -140,6 +140,7 @@ jobs:
         env:
           OVPNCONF_TARGZ: ${{ secrets.OVPNCONF_TARGZ }}
         run: |
+          sudo apt update
           #sudo apt install openvpn
           sudo apt install gnuplot-nox &> /dev/null &
           exit 0  #Disabling rest of this step
