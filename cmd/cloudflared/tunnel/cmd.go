@@ -28,8 +28,12 @@ import (
 	"github.com/cloudflare/cloudflared/cmd/cloudflared/updater"
 	"github.com/cloudflare/cloudflared/config"
 	"github.com/cloudflare/cloudflared/connection"
+	"github.com/cloudflare/cloudflared/credentials"
+	"github.com/cloudflare/cloudflared/edgediscovery"
+	"github.com/cloudflare/cloudflared/features"
 	"github.com/cloudflare/cloudflared/ingress"
 	"github.com/cloudflare/cloudflared/logger"
+	"github.com/cloudflare/cloudflared/management"
 	"github.com/cloudflare/cloudflared/metrics"
 	"github.com/cloudflare/cloudflared/orchestration"
 	"github.com/cloudflare/cloudflared/signal"
@@ -41,6 +45,9 @@ import (
 
 const (
 	sentryDSN = "https://56a9c9fa5c364ab28f34b14f35ea0f1b:3e8827f6f9f740738eb11138f7bebb68@sentry.io/189878"
+
+	// ha-Connections specifies how many connections to make to the edge
+	haConnectionsFlag = "ha-connections"
 
 	// sshPortFlag is the port on localhost the cloudflared ssh server will run on
 	sshPortFlag = "local-ssh-port"
@@ -75,9 +82,6 @@ const (
 	// uiFlag is to enable launching cloudflared in interactive UI mode
 	uiFlag = "ui"
 
-	debugLevelWarning = "At debug level cloudflared will log request URL, method, protocol, content length, as well as, all request and response headers. " +
-		"This can expose sensitive information in your logs."
-
 	LogFieldCommand             = "command"
 	LogFieldExpandedPath        = "expandedPath"
 	LogFieldPIDPathname         = "pidPathname"
@@ -92,6 +96,7 @@ Eg. cloudflared tunnel --url localhost:8080/.
 Please note that Quick Tunnels are meant to be ephemeral and should only be used for testing purposes.
 For production usage, we recommend creating Named Tunnels. (https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/tunnel-guide/)
 `
+	connectorLabelFlag = "label"
 )
 
 var (
@@ -199,7 +204,7 @@ func TunnelCommand(c *cli.Context) error {
 	// Run a quick tunnel
 	// A unauthenticated named tunnel hosted on <random>.<quick-tunnels-service>.com
 	// We don't support running proxy-dns and a quick tunnel at the same time as the same process
-	shouldRunQuickTunnel := c.IsSet("url") || c.IsSet("hello-world")
+	shouldRunQuickTunnel := c.IsSet("url") || c.IsSet(ingress.HelloWorldFlag)
 	if !c.IsSet("proxy-dns") && c.String("quick-service") != "" && shouldRunQuickTunnel {
 		return RunQuickTunnel(sc)
 	}
@@ -215,6 +220,9 @@ func TunnelCommand(c *cli.Context) error {
 	}
 
 	if c.IsSet("proxy-dns") {
+		if shouldRunQuickTunnel {
+			return fmt.Errorf("running a quick tunnel with `proxy-dns` is not supported")
+		}
 		// NamedTunnelProperties are nil since proxy dns server does not need it.
 		// This is supported for legacy reasons: dns proxy server is not a tunnel and ideally should
 		// not run as part of cloudflared tunnel.
@@ -391,7 +399,26 @@ func StartServer(
 		}
 	}
 
-	orchestrator, err := orchestration.NewOrchestrator(ctx, orchestratorConfig, tunnelConfig.Tags, tunnelConfig.Log)
+	localRules := []ingress.Rule{}
+	if features.Contains(features.FeatureManagementLogs) {
+		serviceIP := c.String("service-op-ip")
+		if edgeAddrs, err := edgediscovery.ResolveEdge(log, tunnelConfig.Region, tunnelConfig.EdgeIPVersion); err == nil {
+			if serviceAddr, err := edgeAddrs.GetAddrForRPC(); err == nil {
+				serviceIP = serviceAddr.TCP.String()
+			}
+		}
+
+		mgmt := management.New(
+			c.String("management-hostname"),
+			serviceIP,
+			clientID,
+			c.String(connectorLabelFlag),
+			logger.ManagementLogger.Log,
+			logger.ManagementLogger,
+		)
+		localRules = []ingress.Rule{ingress.NewManagementRule(mgmt)}
+	}
+	orchestrator, err := orchestration.NewOrchestrator(ctx, orchestratorConfig, tunnelConfig.Tags, localRules, tunnelConfig.Log)
 	if err != nil {
 		return err
 	}
@@ -415,7 +442,7 @@ func StartServer(
 		errC <- metrics.ServeMetrics(metricsListener, ctx, metricsConfig, log)
 	}()
 
-	reconnectCh := make(chan supervisor.ReconnectSignal, c.Int("ha-connections"))
+	reconnectCh := make(chan supervisor.ReconnectSignal, c.Int(haConnectionsFlag))
 	if c.IsSet("stdin-control") {
 		log.Info().Msg("Enabling control through stdin")
 		go stdinControl(reconnectCh, log)
@@ -528,7 +555,7 @@ func addPortIfMissing(uri *url.URL, port int) string {
 func tunnelFlags(shouldHide bool) []cli.Flag {
 	flags := configureCloudflaredFlags(shouldHide)
 	flags = append(flags, configureProxyFlags(shouldHide)...)
-	flags = append(flags, configureLoggingFlags(shouldHide)...)
+	flags = append(flags, cliutil.ConfigureLoggingFlags(shouldHide)...)
 	flags = append(flags, configureProxyDNSFlags(shouldHide)...)
 	flags = append(flags, []cli.Flag{
 		credentialsFileFlag,
@@ -652,9 +679,14 @@ func tunnelFlags(shouldHide bool) []cli.Flag {
 			Hidden:  shouldHide,
 		}),
 		altsrc.NewIntFlag(&cli.IntFlag{
-			Name:   "ha-connections",
+			Name:   haConnectionsFlag,
 			Value:  4,
 			Hidden: true,
+		}),
+		altsrc.NewStringFlag(&cli.StringFlag{
+			Name:  connectorLabelFlag,
+			Usage: "Use this option to give a meaningful label to a specific connector. When a tunnel starts up, a connector id unique to the tunnel is generated. This is a uuid. To make it easier to identify a connector, we will use the hostname of the machine the tunnel is running on along with the connector ID. This option exists if one wants to have more control over what their individual connectors are called.",
+			Value: "",
 		}),
 		altsrc.NewDurationFlag(&cli.DurationFlag{
 			Name:    "grace-period",
@@ -741,10 +773,10 @@ func configureCloudflaredFlags(shouldHide bool) []cli.Flag {
 			Hidden: shouldHide,
 		},
 		altsrc.NewStringFlag(&cli.StringFlag{
-			Name:    "origincert",
+			Name:    credentials.OriginCertFlag,
 			Usage:   "Path to the certificate generated for your origin when you run cloudflared login.",
 			EnvVars: []string{"TUNNEL_ORIGIN_CERT"},
-			Value:   findDefaultOriginCertPath(),
+			Value:   credentials.FindDefaultOriginCertPath(),
 			Hidden:  shouldHide,
 		}),
 		altsrc.NewDurationFlag(&cli.DurationFlag{
@@ -786,7 +818,7 @@ func configureProxyFlags(shouldHide bool) []cli.Flag {
 			Hidden:  shouldHide,
 		}),
 		altsrc.NewBoolFlag(&cli.BoolFlag{
-			Name:    "hello-world",
+			Name:    ingress.HelloWorldFlag,
 			Value:   false,
 			Usage:   "Run Hello World Server",
 			EnvVars: []string{"TUNNEL_HELLO_WORLD"},
@@ -888,6 +920,20 @@ func configureProxyFlags(shouldHide bool) []cli.Flag {
 			EnvVars: []string{"TUNNEL_ORIGIN_ENABLE_HTTP2"},
 			Hidden:  shouldHide,
 			Value:   false,
+		}),
+		altsrc.NewStringFlag(&cli.StringFlag{
+			Name:    "management-hostname",
+			Usage:   "Management hostname to signify incoming management requests",
+			EnvVars: []string{"TUNNEL_MANAGEMENT_HOSTNAME"},
+			Hidden:  true,
+			Value:   "management.argotunnel.com",
+		}),
+		altsrc.NewStringFlag(&cli.StringFlag{
+			Name:    "service-op-ip",
+			Usage:   "Fallback IP for service operations run by the management service.",
+			EnvVars: []string{"TUNNEL_SERVICE_OP_IP"},
+			Hidden:  true,
+			Value:   "198.41.200.113:80",
 		}),
 	}
 	return append(flags, sshFlags(shouldHide)...)
@@ -992,44 +1038,6 @@ func sshFlags(shouldHide bool) []cli.Flag {
 			Usage:   "Listen port for the proxy.",
 			Value:   0,
 			EnvVars: []string{"TUNNEL_PROXY_PORT"},
-			Hidden:  shouldHide,
-		}),
-	}
-}
-
-func configureLoggingFlags(shouldHide bool) []cli.Flag {
-	return []cli.Flag{
-		altsrc.NewStringFlag(&cli.StringFlag{
-			Name:    logger.LogLevelFlag,
-			Value:   "info",
-			Usage:   "Application logging level {debug, info, warn, error, fatal}. " + debugLevelWarning,
-			EnvVars: []string{"TUNNEL_LOGLEVEL"},
-			Hidden:  shouldHide,
-		}),
-		altsrc.NewStringFlag(&cli.StringFlag{
-			Name:    logger.LogTransportLevelFlag,
-			Aliases: []string{"proto-loglevel"}, // This flag used to be called proto-loglevel
-			Value:   "info",
-			Usage:   "Transport logging level(previously called protocol logging level) {debug, info, warn, error, fatal}",
-			EnvVars: []string{"TUNNEL_PROTO_LOGLEVEL", "TUNNEL_TRANSPORT_LOGLEVEL"},
-			Hidden:  shouldHide,
-		}),
-		altsrc.NewStringFlag(&cli.StringFlag{
-			Name:    logger.LogFileFlag,
-			Usage:   "Save application log to this file for reporting issues.",
-			EnvVars: []string{"TUNNEL_LOGFILE"},
-			Hidden:  shouldHide,
-		}),
-		altsrc.NewStringFlag(&cli.StringFlag{
-			Name:    logger.LogDirectoryFlag,
-			Usage:   "Save application log to this directory for reporting issues.",
-			EnvVars: []string{"TUNNEL_LOGDIRECTORY"},
-			Hidden:  shouldHide,
-		}),
-		altsrc.NewStringFlag(&cli.StringFlag{
-			Name:    "trace-output",
-			Usage:   "Name of trace output file, generated when cloudflared stops.",
-			EnvVars: []string{"TUNNEL_TRACE_OUTPUT"},
 			Hidden:  shouldHide,
 		}),
 	}

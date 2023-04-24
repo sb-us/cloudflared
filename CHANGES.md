@@ -1,3 +1,21 @@
+## 2023.4.1
+### New Features
+- You can now stream your logs from your remote cloudflared to your local terminal with `cloudflared tail <TUNNEL-ID>`. This new feature requires the remote cloudflared to be version 2023.4.1 or higher.
+
+## 2023.3.2
+### Notices
+- Due to the nature of QuickTunnels (https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/do-more-with-tunnels/trycloudflare/) and its intended usage for testing and experiment of Cloudflare Tunnels, starting from 2023.3.2, QuickTunnels only make a single connection to the edge. If users want to use Tunnels in a production environment, they should move to Named Tunnels instead. (https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/tunnel-guide/remote/#set-up-a-tunnel-remotely-dashboard-setup)
+
+## 2023.3.1
+### Breaking Change
+- Running a tunnel without ingress rules defined in configuration file nor from the CLI flags will no longer provide a default ingress rule to localhost:8080 and instead will return HTTP response code 503 for all incoming HTTP requests.
+
+### Security Fixes
+- Windows 32 bit machines MSI now defaults to Program Files to install cloudflared. (See CVE-2023-1314). The cloudflared client itself is unaffected. This just changes how the installer works on 32 bit windows machines.
+
+### Bug Fixes
+- Fixed a bug that would cause running tunnel on Bastion mode and without ingress rules to crash.
+
 ## 2023.2.2
 ### Notices
 - Legacy tunnels were officially deprecated on December 1, 2022. Starting with this version, cloudflared no longer supports connecting legacy tunnels.
@@ -11,7 +29,7 @@
 
 ## 2022.12.0
 ### Improvements
-- cloudflared now attempts to try other edge addresses before falling back to a lower protoocol.
+- cloudflared now attempts to try other edge addresses before falling back to a lower protocol.
 - cloudflared tunnel no longer spins up a quick tunnel. The call has to be explicit and provide a --url flag.
 - cloudflared will now randomly pick the first or second region to connect to instead of always connecting to region2 first.
 
