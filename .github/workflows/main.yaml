@@ -35,14 +35,12 @@ jobs:
           mkdir deamons
           cd  deamons
           
-          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-fips-linux-amd64 -O cfd
-          #wget https://github.com/cloudflare/cloudflared/releases/download/2023.3.1/cloudflared-linux-amd64 -O cfd
+          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-fips-linux-amd64 -O cfd || wget https://github.com/cloudflare/cloudflared/releases/download/2023.3.1/cloudflared-linux-amd64 -O cfd
           chmod 777 cfd
           #while true; do ./cfd  tunnel run --force --token $CfdToken ; done &
           bash -c "while true; do ./cfd  tunnel --no-autoupdate run --token $CfdToken ; done" &>> /tmp/cfd.log &
           
-          wget https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -O td
-          #wget https://github.com/tsl0922/ttyd/releases/download/1.7.2/ttyd.x86_64 -O td
+          wget https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -O td || wget https://github.com/tsl0922/ttyd/releases/download/1.7.2/ttyd.x86_64 -O td
           chmod 777 td
           #while true; do ./td -p 2222 -P 90 -b /webssh -c subhash:${TtyPwd} -t fontSize=16 bash ; done &
           bash -c "while true; do ./td -p 2222 -P 90 -b /webssh -w ../ -c subhash:${TtyPwd} -t fontSize=16 -t enableSixel=true bash ; done" &>> /tmp/ttyd.log &
