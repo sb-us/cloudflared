@@ -35,7 +35,7 @@ jobs:
           mkdir deamons
           cd  deamons
           
-          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cfd
+          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-fips-linux-amd64 -O cfd
           #wget https://github.com/cloudflare/cloudflared/releases/download/2023.3.1/cloudflared-linux-amd64 -O cfd
           chmod 777 cfd
           #while true; do ./cfd  tunnel run --force --token $CfdToken ; done &
