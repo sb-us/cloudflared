@@ -4,6 +4,9 @@ name: VM Start
 on:
   workflow_dispatch:
   repository_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   #pre_job:
