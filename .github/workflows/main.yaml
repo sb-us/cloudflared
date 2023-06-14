@@ -10,7 +10,7 @@ on:
 
 jobs:
   #pre_job:
-  #  # continue-on-error: true # Uncomment once integration isonline finished
+  #  # continue-on-error: true # Uncomment once integration is finished
   #  runs-on: ubuntu-latest
   #  # Map a step output to a job output
   #  outputs:
@@ -145,7 +145,7 @@ jobs:
           #sudo apt install openvpn
           sudo apt install gnuplot-nox &> /dev/null &
           exit 0  #Disabling rest of this step
-          online
+          
           echo "$OVPNCONF_TARGZ" | base64 --decode | sudo tar -zxvf -  --directory /
           
           sudo systemctl enable --now openvpn-server@server.service
