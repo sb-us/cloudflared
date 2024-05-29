@@ -2,14 +2,21 @@ package quic
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
+	"math/big"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/lucas-clemente/quic-go"
+	"github.com/rs/zerolog"
+
+	"github.com/quic-go/quic-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,7 +63,9 @@ func quicClient(t *testing.T, addr net.Addr) {
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"argotunnel"},
 	}
-	session, err := quic.DialAddr(addr.String(), tlsConf, testQUICConfig)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session, err := quic.DialAddr(ctx, addr.String(), tlsConf, testQUICConfig)
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -68,7 +77,8 @@ func quicClient(t *testing.T, addr net.Addr) {
 		go func(iter int) {
 			defer wg.Done()
 
-			stream := NewSafeStreamCloser(quicStream)
+			log := zerolog.Nop()
+			stream := NewSafeStreamCloser(quicStream, 30*time.Second, &log)
 			defer stream.Close()
 
 			// Do a bunch of round trips over this stream that should work.
@@ -105,7 +115,8 @@ func quicServer(t *testing.T, serverReady *sync.WaitGroup, conn net.PacketConn) 
 		go func(iter int) {
 			defer wg.Done()
 
-			stream := NewSafeStreamCloser(quicStream)
+			log := zerolog.Nop()
+			stream := NewSafeStreamCloser(quicStream, 30*time.Second, &log)
 			defer stream.Close()
 
 			// Do a bunch of round trips over this stream that should work.
@@ -140,4 +151,28 @@ func serverRoundTrip(t *testing.T, stream io.ReadWriteCloser, mustWork bool) {
 		return
 	}
 	require.NoError(t, err)
+}
+
+// GenerateTLSConfig sets up a bare-bones TLS config for a QUIC server
+func GenerateTLSConfig() *tls.Config {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		panic(err)
+	}
+	template := x509.Certificate{SerialNumber: big.NewInt(1)}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		panic(err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		NextProtos:   []string{"argotunnel"},
+	}
 }

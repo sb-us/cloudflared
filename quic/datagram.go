@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/lucas-clemente/quic-go"
 	"github.com/pkg/errors"
+	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog"
 
 	"github.com/cloudflare/cloudflared/packet"
@@ -53,7 +53,7 @@ func (dm *DatagramMuxer) SendToSession(session *packet.Session) error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to suffix session ID to datagram, it will be dropped")
 	}
-	if err := dm.session.SendMessage(payloadWithMetadata); err != nil {
+	if err := dm.session.SendDatagram(payloadWithMetadata); err != nil {
 		return errors.Wrap(err, "Failed to send datagram back to edge")
 	}
 	return nil
@@ -64,7 +64,7 @@ func (dm *DatagramMuxer) ServeReceive(ctx context.Context) error {
 		// Extracts datagram session ID, then sends the session ID and payload to receiver
 		// which determines how to proxy to the origin. It assumes the datagram session has already been
 		// registered with receiver through other side channel
-		msg, err := dm.session.ReceiveMessage()
+		msg, err := dm.session.ReceiveDatagram(ctx)
 		if err != nil {
 			return err
 		}

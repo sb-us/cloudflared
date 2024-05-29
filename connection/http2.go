@@ -40,8 +40,6 @@ type HTTP2Connection struct {
 	connOptions  *tunnelpogs.ConnectionOptions
 	observer     *Observer
 	connIndex    uint8
-	// newRPCClientFunc allows us to mock RPCs during testing
-	newRPCClientFunc func(context.Context, io.ReadWriteCloser, *zerolog.Logger) NamedTunnelRPCClient
 
 	log                  *zerolog.Logger
 	activeRequestsWG     sync.WaitGroup
@@ -69,7 +67,6 @@ func NewHTTP2Connection(
 		connOptions:          connOptions,
 		observer:             observer,
 		connIndex:            connIndex,
-		newRPCClientFunc:     newRegistrationRPCClient,
 		controlStreamHandler: controlStreamHandler,
 		log:                  log,
 	}
@@ -142,7 +139,7 @@ func (c *HTTP2Connection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		rws := NewHTTPResponseReadWriterAcker(respWriter, r)
+		rws := NewHTTPResponseReadWriterAcker(respWriter, respWriter, r)
 		requestErr = originProxy.ProxyTCP(r.Context(), rws, &TCPRequest{
 			Dest:      host,
 			CFRay:     FindCfRayHeader(r),
@@ -287,6 +284,10 @@ func (rp *http2RespWriter) WriteRespHeaders(status int, header http.Header) erro
 
 func (rp *http2RespWriter) Header() http.Header {
 	return rp.respHeaders
+}
+
+func (rp *http2RespWriter) Flush() {
+	rp.flusher.Flush()
 }
 
 func (rp *http2RespWriter) WriteHeader(status int) {

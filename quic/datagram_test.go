@@ -10,13 +10,14 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/google/gopacket/layers"
 	"github.com/google/uuid"
-	"github.com/lucas-clemente/quic-go"
+	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/icmp"
@@ -114,9 +115,8 @@ func TestDatagram(t *testing.T) {
 
 func testDatagram(t *testing.T, version uint8, sessionToPayloads []*packet.Session, packets []packet.ICMP) {
 	quicConfig := &quic.Config{
-		KeepAlivePeriod:      5 * time.Millisecond,
-		EnableDatagrams:      true,
-		MaxDatagramFrameSize: MaxDatagramFrameSize,
+		KeepAlivePeriod: 5 * time.Millisecond,
+		EnableDatagrams: true,
 	}
 	quicListener := newQUICListener(t, quicConfig)
 	defer quicListener.Close()
@@ -180,8 +180,14 @@ func testDatagram(t *testing.T, version uint8, sessionToPayloads []*packet.Sessi
 			InsecureSkipVerify: true,
 			NextProtos:         []string{"argotunnel"},
 		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// https://github.com/quic-go/quic-go/issues/3793 MTU discovery is disabled on OSX for dual stack listeners
+		udpConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		require.NoError(t, err)
 		// Establish quic connection
-		quicSession, err := quic.DialAddrEarly(quicListener.Addr().String(), tlsClientConfig, quicConfig)
+		quicSession, err := quic.DialEarly(ctx, udpConn, quicListener.Addr(), tlsClientConfig, quicConfig)
 		require.NoError(t, err)
 		defer quicSession.CloseWithError(0, "")
 
@@ -264,7 +270,7 @@ func validateTracingSpans(t *testing.T, receivedPacket Packet, expectedSpan *Tra
 	require.Equal(t, tracingSpans, expectedSpan)
 }
 
-func newQUICListener(t *testing.T, config *quic.Config) quic.Listener {
+func newQUICListener(t *testing.T, config *quic.Config) *quic.Listener {
 	// Create a simple tls config.
 	tlsConfig := generateTLSConfig()
 

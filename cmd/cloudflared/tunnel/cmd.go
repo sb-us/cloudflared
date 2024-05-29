@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"runtime/trace"
@@ -12,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coreos/go-systemd/daemon"
+	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/facebookgo/grace/gracenet"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
@@ -78,6 +77,17 @@ const (
 
 	// hostKeyPath is the path of the dir to save SSH host keys too
 	hostKeyPath = "host-key-path"
+
+	// rpcTimeout is how long to wait for a Capnp RPC request to the edge
+	rpcTimeout = "rpc-timeout"
+
+	// writeStreamTimeout sets if we should have a timeout when writing data to a stream towards the destination (edge/origin).
+	writeStreamTimeout = "write-stream-timeout"
+
+	// quicDisablePathMTUDiscovery sets if QUIC should not perform PTMU discovery and use a smaller (safe) packet size.
+	// Packets will then be at most 1252 (IPv4) / 1232 (IPv6) bytes in size.
+	// Note that this may result in packet drops for UDP proxying, since we expect being able to send at least 1280 bytes of inner packets.
+	quicDisablePathMTUDiscovery = "quic-disable-pmtu-discovery"
 
 	// uiFlag is to enable launching cloudflared in interactive UI mode
 	uiFlag = "ui"
@@ -277,7 +287,7 @@ func routeFromFlag(c *cli.Context) (route cfapi.HostnameRoute, ok bool) {
 func StartServer(
 	c *cli.Context,
 	info *cliutil.BuildInfo,
-	namedTunnel *connection.NamedTunnelProperties,
+	namedTunnel *connection.TunnelProperties,
 	log *zerolog.Logger,
 ) error {
 	err := sentry.Init(sentry.ClientOptions{
@@ -297,7 +307,7 @@ func StartServer(
 	}
 
 	if c.IsSet("trace-output") {
-		tmpTraceFile, err := ioutil.TempFile("", "trace")
+		tmpTraceFile, err := os.CreateTemp("", "trace")
 		if err != nil {
 			log.Err(err).Msg("Failed to create new temporary file to save trace output")
 		}
@@ -333,7 +343,7 @@ func StartServer(
 	logClientOptions(c, log)
 
 	// this context drives the server, when it's cancelled tunnel and all other components (origins, dns, etc...) should stop
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(c.Context)
 	defer cancel()
 
 	go waitForSignal(graceShutdownC, log)
@@ -385,7 +395,7 @@ func StartServer(
 		observer.SendURL(quickTunnelURL)
 	}
 
-	tunnelConfig, orchestratorConfig, err := prepareTunnelConfig(c, info, log, logTransport, observer, namedTunnel)
+	tunnelConfig, orchestratorConfig, err := prepareTunnelConfig(ctx, c, info, log, logTransport, observer, namedTunnel)
 	if err != nil {
 		log.Err(err).Msg("Couldn't start tunnel")
 		return err
@@ -399,7 +409,12 @@ func StartServer(
 		}
 	}
 
-	localRules := []ingress.Rule{}
+	// Disable ICMP packet routing for quick tunnels
+	if quickTunnelURL != "" {
+		tunnelConfig.PacketConfig = nil
+	}
+
+	internalRules := []ingress.Rule{}
 	if features.Contains(features.FeatureManagementLogs) {
 		serviceIP := c.String("service-op-ip")
 		if edgeAddrs, err := edgediscovery.ResolveEdge(log, tunnelConfig.Region, tunnelConfig.EdgeIPVersion); err == nil {
@@ -410,15 +425,16 @@ func StartServer(
 
 		mgmt := management.New(
 			c.String("management-hostname"),
+			c.Bool("management-diagnostics"),
 			serviceIP,
 			clientID,
 			c.String(connectorLabelFlag),
 			logger.ManagementLogger.Log,
 			logger.ManagementLogger,
 		)
-		localRules = []ingress.Rule{ingress.NewManagementRule(mgmt)}
+		internalRules = []ingress.Rule{ingress.NewManagementRule(mgmt)}
 	}
-	orchestrator, err := orchestration.NewOrchestrator(ctx, orchestratorConfig, tunnelConfig.Tags, localRules, tunnelConfig.Log)
+	orchestrator, err := orchestration.NewOrchestrator(ctx, orchestratorConfig, tunnelConfig.Tags, internalRules, tunnelConfig.Log)
 	if err != nil {
 		return err
 	}
@@ -647,9 +663,9 @@ func tunnelFlags(shouldHide bool) []cli.Flag {
 		}),
 		altsrc.NewStringSliceFlag(&cli.StringSliceFlag{
 			Name:    "tag",
-			Usage:   "Custom tags used to identify this tunnel, in format `KEY=VALUE`. Multiple tags may be specified",
+			Usage:   "Custom tags used to identify this tunnel via added HTTP request headers to the origin, in format `KEY=VALUE`. Multiple tags may be specified.",
 			EnvVars: []string{"TUNNEL_TAG"},
-			Hidden:  shouldHide,
+			Hidden:  true,
 		}),
 		altsrc.NewDurationFlag(&cli.DurationFlag{
 			Name:   "heartbeat-interval",
@@ -682,6 +698,25 @@ func tunnelFlags(shouldHide bool) []cli.Flag {
 			Name:   haConnectionsFlag,
 			Value:  4,
 			Hidden: true,
+		}),
+		altsrc.NewDurationFlag(&cli.DurationFlag{
+			Name:   rpcTimeout,
+			Value:  5 * time.Second,
+			Hidden: true,
+		}),
+		altsrc.NewDurationFlag(&cli.DurationFlag{
+			Name:    writeStreamTimeout,
+			EnvVars: []string{"TUNNEL_STREAM_WRITE_TIMEOUT"},
+			Usage:   "Use this option to add a stream write timeout for connections when writing towards the origin or edge. Default is 0 which disables the write timeout.",
+			Value:   0 * time.Second,
+			Hidden:  true,
+		}),
+		altsrc.NewBoolFlag(&cli.BoolFlag{
+			Name:    quicDisablePathMTUDiscovery,
+			EnvVars: []string{"TUNNEL_DISABLE_QUIC_PMTU"},
+			Usage:   "Use this option to disable PTMU discovery for QUIC connections. This will result in lower packet sizes. Not however, that this may cause instability for UDP proxying.",
+			Value:   false,
+			Hidden:  true,
 		}),
 		altsrc.NewStringFlag(&cli.StringFlag{
 			Name:  connectorLabelFlag,
@@ -755,6 +790,12 @@ func tunnelFlags(shouldHide bool) []cli.Flag {
 			Aliases: []string{"pq"},
 			EnvVars: []string{"TUNNEL_POST_QUANTUM"},
 			Hidden:  FipsEnabled,
+		}),
+		altsrc.NewBoolFlag(&cli.BoolFlag{
+			Name:    "management-diagnostics",
+			Usage:   "Enables the in-depth diagnostic routes to be made available over the management service (/debug/pprof, /metrics, etc.)",
+			EnvVars: []string{"TUNNEL_MANAGEMENT_DIAGNOSTICS"},
+			Value:   true,
 		}),
 		selectProtocolFlag,
 		overwriteDNSFlag,

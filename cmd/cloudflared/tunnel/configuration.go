@@ -1,9 +1,9 @@
 package tunnel
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
-	mathRand "math/rand"
 	"net"
 	"net/netip"
 	"os"
@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/urfave/cli/v2"
 	"github.com/urfave/cli/v2/altsrc"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 
 	"github.com/cloudflare/cloudflared/cmd/cloudflared/cliutil"
 	"github.com/cloudflare/cloudflared/config"
@@ -27,15 +27,18 @@ import (
 	"github.com/cloudflare/cloudflared/orchestration"
 	"github.com/cloudflare/cloudflared/supervisor"
 	"github.com/cloudflare/cloudflared/tlsconfig"
-	tunnelpogs "github.com/cloudflare/cloudflared/tunnelrpc/pogs"
+	"github.com/cloudflare/cloudflared/tunnelrpc/pogs"
 )
 
-const secretValue = "*****"
+const (
+	secretValue       = "*****"
+	icmpFunnelTimeout = time.Second * 10
+)
 
 var (
-	developerPortal = "https://developers.cloudflare.com/argo-tunnel"
-	serviceUrl      = developerPortal + "/reference/service/"
-	argumentsUrl    = developerPortal + "/reference/arguments/"
+	developerPortal = "https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup"
+	serviceUrl      = developerPortal + "/tunnel-guide/local/as-a-service/"
+	argumentsUrl    = developerPortal + "/tunnel-guide/local/local-management/arguments/"
 
 	secretFlags = [2]*altsrc.StringFlag{credentialsContentsFlag, tunnelTokenFlag}
 
@@ -105,7 +108,7 @@ func isSecretEnvVar(key string) bool {
 	return false
 }
 
-func dnsProxyStandAlone(c *cli.Context, namedTunnel *connection.NamedTunnelProperties) bool {
+func dnsProxyStandAlone(c *cli.Context, namedTunnel *connection.TunnelProperties) bool {
 	return c.IsSet("proxy-dns") &&
 		!(c.IsSet("name") || // adhoc-named tunnel
 			c.IsSet(ingress.HelloWorldFlag) || // quick or named tunnel
@@ -113,11 +116,12 @@ func dnsProxyStandAlone(c *cli.Context, namedTunnel *connection.NamedTunnelPrope
 }
 
 func prepareTunnelConfig(
+	ctx context.Context,
 	c *cli.Context,
 	info *cliutil.BuildInfo,
 	log, logTransport *zerolog.Logger,
 	observer *connection.Observer,
-	namedTunnel *connection.NamedTunnelProperties,
+	namedTunnel *connection.TunnelProperties,
 ) (*supervisor.TunnelConfig, *orchestration.Config, error) {
 	clientID, err := uuid.NewRandom()
 	if err != nil {
@@ -129,26 +133,40 @@ func prepareTunnelConfig(
 		log.Err(err).Msg("Tag parse failure")
 		return nil, nil, errors.Wrap(err, "Tag parse failure")
 	}
-	tags = append(tags, tunnelpogs.Tag{Name: "ID", Value: clientID.String()})
+	tags = append(tags, pogs.Tag{Name: "ID", Value: clientID.String()})
 
 	transportProtocol := c.String("protocol")
-	needPQ := c.Bool("post-quantum")
-	if needPQ {
+
+	clientFeatures := features.Dedup(append(c.StringSlice("features"), features.DefaultFeatures...))
+
+	staticFeatures := features.StaticFeatures{}
+	if c.Bool("post-quantum") {
 		if FipsEnabled {
 			return nil, nil, fmt.Errorf("post-quantum not supported in FIPS mode")
 		}
+		pqMode := features.PostQuantumStrict
+		staticFeatures.PostQuantumMode = &pqMode
+	}
+	featureSelector, err := features.NewFeatureSelector(ctx, namedTunnel.Credentials.AccountTag, staticFeatures, log)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "Failed to create feature selector")
+	}
+	pqMode := featureSelector.PostQuantumMode()
+	if pqMode == features.PostQuantumStrict {
 		// Error if the user tries to force a non-quic transport protocol
 		if transportProtocol != connection.AutoSelectFlag && transportProtocol != connection.QUIC.String() {
 			return nil, nil, fmt.Errorf("post-quantum is only supported with the quic transport")
 		}
 		transportProtocol = connection.QUIC.String()
+		clientFeatures = append(clientFeatures, features.FeaturePostQuantum)
+
+		log.Info().Msgf(
+			"Using hybrid post-quantum key agreement %s",
+			supervisor.PQKexName,
+		)
 	}
 
-	clientFeatures := dedup(append(c.StringSlice("features"), features.DefaultFeatures...))
-	if needPQ {
-		clientFeatures = append(clientFeatures, features.FeaturePostQuantum)
-	}
-	namedTunnel.Client = tunnelpogs.ClientInfo{
+	namedTunnel.Client = pogs.ClientInfo{
 		ClientID: clientID[:],
 		Features: clientFeatures,
 		Version:  info.Version(),
@@ -203,15 +221,6 @@ func prepareTunnelConfig(
 		log.Warn().Str("edgeIPVersion", edgeIPVersion.String()).Err(err).Msg("Overriding edge-ip-version")
 	}
 
-	var pqKexIdx int
-	if needPQ {
-		pqKexIdx = mathRand.Intn(len(supervisor.PQKexes))
-		log.Info().Msgf(
-			"Using experimental hybrid post-quantum key agreement %s",
-			supervisor.PQKexNames[supervisor.PQKexes[pqKexIdx]],
-		)
-	}
-
 	tunnelConfig := &supervisor.TunnelConfig{
 		GracePeriod:     gracePeriod,
 		ReplaceExisting: c.Bool("force"),
@@ -222,7 +231,6 @@ func prepareTunnelConfig(
 		EdgeIPVersion:   edgeIPVersion,
 		EdgeBindAddr:    edgeBindAddr,
 		HAConnections:   c.Int(haConnectionsFlag),
-		IncidentLookup:  supervisor.NewIncidentLookup(),
 		IsAutoupdated:   c.Bool("is-autoupdated"),
 		LBPool:          c.String("lb-pool"),
 		Tags:            tags,
@@ -231,14 +239,16 @@ func prepareTunnelConfig(
 		Observer:        observer,
 		ReportedVersion: info.Version(),
 		// Note TUN-3758 , we use Int because UInt is not supported with altsrc
-		Retries:            uint(c.Int("retries")),
-		RunFromTerminal:    isRunningFromTerminal(),
-		NamedTunnel:        namedTunnel,
-		ProtocolSelector:   protocolSelector,
-		EdgeTLSConfigs:     edgeTLSConfigs,
-		NeedPQ:             needPQ,
-		PQKexIdx:           pqKexIdx,
-		MaxEdgeAddrRetries: uint8(c.Int("max-edge-addr-retries")),
+		Retries:                     uint(c.Int("retries")),
+		RunFromTerminal:             isRunningFromTerminal(),
+		NamedTunnel:                 namedTunnel,
+		ProtocolSelector:            protocolSelector,
+		EdgeTLSConfigs:              edgeTLSConfigs,
+		FeatureSelector:             featureSelector,
+		MaxEdgeAddrRetries:          uint8(c.Int("max-edge-addr-retries")),
+		RPCTimeout:                  c.Duration(rpcTimeout),
+		WriteStreamTimeout:          c.Duration(writeStreamTimeout),
+		DisableQUICPathMTUDiscovery: c.Bool(quicDisablePathMTUDiscovery),
 	}
 	packetConfig, err := newPacketConfig(c, log)
 	if err != nil {
@@ -250,6 +260,7 @@ func prepareTunnelConfig(
 		Ingress:            &ingressRules,
 		WarpRouting:        ingress.NewWarpRoutingConfig(&cfg.WarpRouting),
 		ConfigurationFlags: parseConfigFlags(c),
+		WriteTimeout:       c.Duration(writeStreamTimeout),
 	}
 	return tunnelConfig, orchestratorConfig, nil
 }
@@ -275,26 +286,7 @@ func gracePeriod(c *cli.Context) (time.Duration, error) {
 }
 
 func isRunningFromTerminal() bool {
-	return terminal.IsTerminal(int(os.Stdout.Fd()))
-}
-
-// Remove any duplicates from the slice
-func dedup(slice []string) []string {
-
-	// Convert the slice into a set
-	set := make(map[string]bool, 0)
-	for _, str := range slice {
-		set[str] = true
-	}
-
-	// Convert the set back into a slice
-	keys := make([]string, len(set))
-	i := 0
-	for str := range set {
-		keys[i] = str
-		i++
-	}
-	return keys
+	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
 // ParseConfigIPVersion returns the IP version from possible expected values from config
@@ -374,7 +366,7 @@ func newPacketConfig(c *cli.Context, logger *zerolog.Logger) (*ingress.GlobalRou
 		logger.Info().Msgf("ICMP proxy will use %s as source for IPv6", ipv6Src)
 	}
 
-	icmpRouter, err := ingress.NewICMPRouter(ipv4Src, ipv6Src, zone, logger)
+	icmpRouter, err := ingress.NewICMPRouter(ipv4Src, ipv6Src, zone, logger, icmpFunnelTimeout)
 	if err != nil {
 		return nil, err
 	}

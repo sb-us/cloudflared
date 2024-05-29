@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,12 +23,12 @@ import (
 	"github.com/cloudflare/cloudflared/ingress"
 	"github.com/cloudflare/cloudflared/management"
 	"github.com/cloudflare/cloudflared/tracing"
-	tunnelpogs "github.com/cloudflare/cloudflared/tunnelrpc/pogs"
+	"github.com/cloudflare/cloudflared/tunnelrpc/pogs"
 )
 
 var (
-	testLogger = zerolog.Logger{}
-	testTags   = []tunnelpogs.Tag{
+	testLogger = zerolog.Nop()
+	testTags   = []pogs.Tag{
 		{
 			Name:  "package",
 			Value: "orchestration",
@@ -51,12 +50,11 @@ func TestUpdateConfiguration(t *testing.T) {
 	initConfig := &Config{
 		Ingress: &ingress.Ingress{},
 	}
-	orchestrator, err := NewOrchestrator(context.Background(), initConfig, testTags, []ingress.Rule{ingress.NewManagementRule(management.New("management.argotunnel.com", "1.1.1.1:80", uuid.Nil, "", &testLogger, nil))}, &testLogger)
+	orchestrator, err := NewOrchestrator(context.Background(), initConfig, testTags, []ingress.Rule{ingress.NewManagementRule(management.New("management.argotunnel.com", false, "1.1.1.1:80", uuid.Nil, "", &testLogger, nil))}, &testLogger)
 	require.NoError(t, err)
 	initOriginProxy, err := orchestrator.GetOriginProxy()
 	require.NoError(t, err)
 	require.Implements(t, (*connection.OriginProxy)(nil), initOriginProxy)
-	require.False(t, orchestrator.WarpRoutingEnabled())
 
 	configJSONV2 := []byte(`
 {
@@ -88,18 +86,17 @@ func TestUpdateConfiguration(t *testing.T) {
         }
     ],
     "warp-routing": {
-        "enabled": true,
         "connectTimeout": 10
     }
-}	
+}
 `)
 
 	updateWithValidation(t, orchestrator, 2, configJSONV2)
 	configV2 := orchestrator.config
-	// Validate local ingress rules
-	require.Equal(t, "management.argotunnel.com", configV2.Ingress.LocalRules[0].Hostname)
-	require.True(t, configV2.Ingress.LocalRules[0].Matches("management.argotunnel.com", "/ping"))
-	require.Equal(t, "management", configV2.Ingress.LocalRules[0].Service.String())
+	// Validate internal ingress rules
+	require.Equal(t, "management.argotunnel.com", configV2.Ingress.InternalRules[0].Hostname)
+	require.True(t, configV2.Ingress.InternalRules[0].Matches("management.argotunnel.com", "/ping"))
+	require.Equal(t, "management", configV2.Ingress.InternalRules[0].Service.String())
 	// Validate ingress rule 0
 	require.Equal(t, "jira.tunnel.org", configV2.Ingress.Rules[0].Hostname)
 	require.True(t, configV2.Ingress.Rules[0].Matches("jira.tunnel.org", "/login"))
@@ -127,8 +124,6 @@ func TestUpdateConfiguration(t *testing.T) {
 	require.Equal(t, config.CustomDuration{Duration: time.Second * 90}, configV2.Ingress.Rules[2].Config.ConnectTimeout)
 	require.Equal(t, false, configV2.Ingress.Rules[2].Config.NoTLSVerify)
 	require.Equal(t, true, configV2.Ingress.Rules[2].Config.NoHappyEyeballs)
-	require.True(t, configV2.WarpRouting.Enabled)
-	require.Equal(t, configV2.WarpRouting.Enabled, orchestrator.WarpRoutingEnabled())
 	require.Equal(t, configV2.WarpRouting.ConnectTimeout.Duration, 10*time.Second)
 
 	originProxyV2, err := orchestrator.GetOriginProxy()
@@ -145,7 +140,7 @@ func TestUpdateConfiguration(t *testing.T) {
 {
 	"originRequest":
 }
-	
+
 `)
 
 	resp = orchestrator.UpdateConfig(3, invalidJSON)
@@ -163,22 +158,68 @@ func TestUpdateConfiguration(t *testing.T) {
         }
     ],
     "warp-routing": {
-        "enabled": false
     }
-}	
+}
 `)
 	updateWithValidation(t, orchestrator, 10, configJSONV10)
 	configV10 := orchestrator.config
 	require.Len(t, configV10.Ingress.Rules, 1)
 	require.True(t, configV10.Ingress.Rules[0].Matches("blogs.tunnel.io", "/2022/02/10"))
 	require.Equal(t, ingress.HelloWorldService, configV10.Ingress.Rules[0].Service.String())
-	require.False(t, configV10.WarpRouting.Enabled)
-	require.Equal(t, configV10.WarpRouting.Enabled, orchestrator.WarpRoutingEnabled())
 
 	originProxyV10, err := orchestrator.GetOriginProxy()
 	require.NoError(t, err)
 	require.Implements(t, (*connection.OriginProxy)(nil), originProxyV10)
 	require.NotEqual(t, originProxyV10, originProxyV2)
+}
+
+// Validates that a new version 0 will be applied if the configuration is loaded locally.
+// This will happen when a locally managed tunnel is migrated to remote configuration and receives its first configuration.
+func TestUpdateConfiguration_FromMigration(t *testing.T) {
+	initConfig := &Config{
+		Ingress: &ingress.Ingress{},
+	}
+	orchestrator, err := NewOrchestrator(context.Background(), initConfig, testTags, []ingress.Rule{}, &testLogger)
+	require.NoError(t, err)
+	initOriginProxy, err := orchestrator.GetOriginProxy()
+	require.NoError(t, err)
+	require.Implements(t, (*connection.OriginProxy)(nil), initOriginProxy)
+
+	configJSONV2 := []byte(`
+{
+    "ingress": [
+        {
+            "service": "http_status:404"
+        }
+    ],
+    "warp-routing": {
+    }
+}
+`)
+	updateWithValidation(t, orchestrator, 0, configJSONV2)
+	require.Len(t, orchestrator.config.Ingress.Rules, 1)
+}
+
+// Validates that the default ingress rule will be set if there is no rule provided from the remote.
+func TestUpdateConfiguration_WithoutIngressRule(t *testing.T) {
+	initConfig := &Config{
+		Ingress: &ingress.Ingress{},
+	}
+	orchestrator, err := NewOrchestrator(context.Background(), initConfig, testTags, []ingress.Rule{}, &testLogger)
+	require.NoError(t, err)
+	initOriginProxy, err := orchestrator.GetOriginProxy()
+	require.NoError(t, err)
+	require.Implements(t, (*connection.OriginProxy)(nil), initOriginProxy)
+
+	// We need to create an empty RemoteConfigJSON because that will get unmarshalled to a RemoteConfig
+	emptyConfig := &ingress.RemoteConfigJSON{}
+	configBytes, err := json.Marshal(emptyConfig)
+	if err != nil {
+		require.FailNow(t, "The RemoteConfigJSON shouldn't fail while being marshalled")
+	}
+
+	updateWithValidation(t, orchestrator, 0, configBytes)
+	require.Len(t, orchestrator.config.Ingress.Rules, 1)
 }
 
 // TestConcurrentUpdateAndRead makes sure orchestrator can receive updates and return origin proxy concurrently
@@ -221,7 +262,6 @@ func TestConcurrentUpdateAndRead(t *testing.T) {
         }
     ],
     "warp-routing": {
-        "enabled": true
     }
 }
 `, hostname, httpOrigin.URL, expectedHost))
@@ -233,7 +273,6 @@ func TestConcurrentUpdateAndRead(t *testing.T) {
         }
     ],
     "warp-routing": {
-        "enabled": false
     }
 }
 `)
@@ -246,7 +285,6 @@ func TestConcurrentUpdateAndRead(t *testing.T) {
         }
     ],
     "warp-routing": {
-        "enabled": true
     }
 }
 `)
@@ -287,7 +325,7 @@ func TestConcurrentUpdateAndRead(t *testing.T) {
 			switch resp.StatusCode {
 			// v1 proxy, warp enabled
 			case 200:
-				body, err := ioutil.ReadAll(resp.Body)
+				body, err := io.ReadAll(resp.Body)
 				require.NoError(t, err)
 				require.Equal(t, t.Name(), string(body))
 				warpRoutingDisabled = false
@@ -399,7 +437,7 @@ func proxyTCP(ctx context.Context, originProxy connection.OriginProxy, originAdd
 		CFRay:   "123",
 		LBProbe: false,
 	}
-	rws := connection.NewHTTPResponseReadWriterAcker(respWriter, req)
+	rws := connection.NewHTTPResponseReadWriterAcker(respWriter, w.(http.Flusher), req)
 
 	return originProxy.ProxyTCP(ctx, rws, tcpReq)
 }
@@ -466,7 +504,6 @@ func TestClosePreviousProxies(t *testing.T) {
 		}
     ],
     "warp-routing": {
-        "enabled": true
     }
 }
 `, hostname))
@@ -479,7 +516,6 @@ func TestClosePreviousProxies(t *testing.T) {
 		}
     ],
     "warp-routing": {
-        "enabled": true
     }
 }
 `)
@@ -562,7 +598,6 @@ func TestPersistentConnection(t *testing.T) {
         }
     ],
     "warp-routing": {
-        "enabled": true
     }
 }
 `, wsOrigin.URL))
@@ -629,7 +664,6 @@ func TestPersistentConnection(t *testing.T) {
         }
     ],
     "warp-routing": {
-        "enabled": false
     }
 }
 `)

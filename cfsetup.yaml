@@ -1,34 +1,44 @@
-pinned_go: &pinned_go go=1.19.6-1
-pinned_go_fips: &pinned_go_fips go-boring=1.19.6-1
+pinned_go: &pinned_go go-boring=1.22.2-1
 
 build_dir: &build_dir /cfsetup_build
 default-flavor: bullseye
-stretch: &stretch
+buster: &buster
   build:
     build_dir: *build_dir
     builddeps: &build_deps
       - *pinned_go
       - build-essential
       - gotest-to-teamcity
+      - fakeroot
+      - rubygem-fpm
+      - rpm
+      - libffi-dev
+      - reprepro
+      - createrepo
     pre-cache: &build_pre_cache
       - export GOCACHE=/cfsetup_build/.cache/go-build
       - go install golang.org/x/tools/cmd/goimports@latest
     post-cache:
-      - export GOOS=linux
-      - export GOARCH=amd64
-      - make cloudflared
+      # TODO: TUN-8126 this is temporary to make sure packages can be built before release
+      - ./build-packages.sh
+      # Build binary for component test
+      - GOOS=linux GOARCH=amd64 make cloudflared
   build-fips:
     build_dir: *build_dir
-    builddeps: &build_deps_fips
-      - *pinned_go_fips
-      - build-essential
-      - gotest-to-teamcity
+    builddeps: *build_deps
     pre-cache: *build_pre_cache
     post-cache:
-      - export GOOS=linux
-      - export GOARCH=amd64
       - export FIPS=true
-      - make cloudflared
+      # TODO: TUN-8126 this is temporary to make sure packages can be built before release
+      - ./build-packages-fips.sh
+      # Build binary for component test
+      - GOOS=linux GOARCH=amd64 make cloudflared
+  cover:
+    build_dir: *build_dir
+    builddeps: *build_deps
+    pre-cache: *build_pre_cache
+    post-cache:
+     - make cover
   # except FIPS (handled in github-fips-release-pkgs) and macos (handled in github-release-macos-amd64)
   github-release-pkgs:
     build_dir: *build_dir
@@ -66,7 +76,7 @@ stretch: &stretch
   github-fips-release-pkgs:
     build_dir: *build_dir
     builddeps:
-      - *pinned_go_fips
+      - *pinned_go
       - build-essential
       - fakeroot
       - rubygem-fpm
@@ -86,7 +96,7 @@ stretch: &stretch
       - make github-release-built-pkgs
   generate-versions-file:
     build_dir: *build_dir
-    builddeps: 
+    builddeps:
       - *pinned_go
       - build-essential
     post-cache:
@@ -105,7 +115,7 @@ stretch: &stretch
   build-fips-internal-deb:
     build_dir: *build_dir
     builddeps: &build_fips_deb_deps
-      - *pinned_go_fips
+      - *pinned_go
       - build-essential
       - fakeroot
       - rubygem-fpm
@@ -115,7 +125,7 @@ stretch: &stretch
       - export FIPS=true
       - export ORIGINAL_NAME=true
       - make cloudflared-deb
-  build-fips-internal-deb-nightly:
+  build-internal-deb-nightly-amd64:
     build_dir: *build_dir
     builddeps: *build_fips_deb_deps
     post-cache:
@@ -123,6 +133,16 @@ stretch: &stretch
       - export GOARCH=amd64
       - export NIGHTLY=true
       - export FIPS=true
+      - export ORIGINAL_NAME=true
+      - make cloudflared-deb
+  build-internal-deb-nightly-arm64:
+    build_dir: *build_dir
+    builddeps: *build_fips_deb_deps
+    post-cache:
+      - export GOOS=linux
+      - export GOARCH=arm64
+      - export NIGHTLY=true
+      #- export FIPS=true # TUN-7595
       - export ORIGINAL_NAME=true
       - make cloudflared-deb
   build-deb-arm64:
@@ -179,7 +199,7 @@ stretch: &stretch
       - make test | gotest-to-teamcity
   test-fips:
     build_dir: *build_dir
-    builddeps: *build_deps_fips
+    builddeps: *build_deps
     pre-cache: *build_pre_cache
     post-cache:
       - export GOOS=linux
@@ -211,7 +231,7 @@ stretch: &stretch
   component-test-fips:
     build_dir: *build_dir
     builddeps:
-      - *pinned_go_fips
+      - *pinned_go
       - python3.7
       - python3-pip
       - python3-setuptools
@@ -222,52 +242,12 @@ stretch: &stretch
       - component-tests/requirements.txt
     pre-cache: *component_test_pre_cache
     post-cache: *component_test_post_cache
-  update-homebrew:
-    builddeps:
-      - openssh-client
-      - s3cmd
-      - jq
-      - build-essential
-      - procps
-    post-cache:
-      - .teamcity/update-homebrew.sh
-      - .teamcity/update-homebrew-core.sh
   github-message-release:
     build_dir: *build_dir
     builddeps: *build_pygithub
     pre-cache: *install_pygithub
     post-cache:
       - make github-message
-  build-junos:
-    build_dir: *build_dir
-    builddeps:
-      - *pinned_go
-      - build-essential
-      - python3
-      - genisoimage
-    pre-cache:
-      - ln -s /usr/bin/genisoimage /usr/bin/mkisofs
-    post-cache:
-      - export CGO_ENABLED=0
-      - export GOOS=freebsd
-      - export GOARCH=amd64
-      - make cloudflared
-  publish-junos:
-    build_dir: *build_dir
-    builddeps:
-      - *pinned_go
-      - build-essential
-      - python3
-      - genisoimage
-      - jetez
-      - s4cmd
-    pre-cache:
-      - ln -s /usr/bin/genisoimage /usr/bin/mkisofs
-    post-cache:
-      - export GOOS=freebsd
-      - export GOARCH=amd64
-      - make publish-cloudflared-junos
 
-buster: *stretch
-bullseye: *stretch
-bookworm: *stretch
+bullseye: *buster
+bookworm: *buster

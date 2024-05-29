@@ -3,9 +3,14 @@ package connection
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,26 +21,27 @@ import (
 
 	"github.com/gobwas/ws/wsutil"
 	"github.com/google/uuid"
-	"github.com/lucas-clemente/quic-go"
 	"github.com/pkg/errors"
+	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/cloudflare/cloudflared/datagramsession"
-	quicpogs "github.com/cloudflare/cloudflared/quic"
+	cfdquic "github.com/cloudflare/cloudflared/quic"
 	"github.com/cloudflare/cloudflared/tracing"
 	"github.com/cloudflare/cloudflared/tunnelrpc/pogs"
 	tunnelpogs "github.com/cloudflare/cloudflared/tunnelrpc/pogs"
+	rpcquic "github.com/cloudflare/cloudflared/tunnelrpc/quic"
 )
 
 var (
-	testTLSServerConfig = quicpogs.GenerateTLSConfig()
+	testTLSServerConfig = GenerateTLSConfig()
 	testQUICConfig      = &quic.Config{
-		ConnectionIDLength: 16,
-		KeepAlivePeriod:    5 * time.Second,
-		EnableDatagrams:    true,
+		KeepAlivePeriod: 5 * time.Second,
+		EnableDatagrams: true,
 	}
+	defaultQUICTimeout = 30 * time.Second
 )
 
 var _ ReadWriteAcker = (*streamReadWriteAcker)(nil)
@@ -43,13 +49,6 @@ var _ ReadWriteAcker = (*streamReadWriteAcker)(nil)
 // TestQUICServer tests if a quic server accepts and responds to a quic client with the acceptance protocol.
 // It also serves as a demonstration for communication with the QUIC connection started by a cloudflared.
 func TestQUICServer(t *testing.T) {
-	// Start a UDP Listener for QUIC.
-	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	udpListener, err := net.ListenUDP(udpAddr.Network(), udpAddr)
-	require.NoError(t, err)
-	defer udpListener.Close()
-
 	// This is simply a sample websocket frame message.
 	wsBuf := &bytes.Buffer{}
 	wsutil.WriteClientBinary(wsBuf, []byte("Hello"))
@@ -57,16 +56,16 @@ func TestQUICServer(t *testing.T) {
 	var tests = []struct {
 		desc             string
 		dest             string
-		connectionType   quicpogs.ConnectionType
-		metadata         []quicpogs.Metadata
+		connectionType   pogs.ConnectionType
+		metadata         []pogs.Metadata
 		message          []byte
 		expectedResponse []byte
 	}{
 		{
 			desc:           "test http proxy",
 			dest:           "/ok",
-			connectionType: quicpogs.ConnectionTypeHTTP,
-			metadata: []quicpogs.Metadata{
+			connectionType: pogs.ConnectionTypeHTTP,
+			metadata: []pogs.Metadata{
 				{
 					Key: "HttpHeader:Cf-Ray",
 					Val: "123123123",
@@ -85,8 +84,8 @@ func TestQUICServer(t *testing.T) {
 		{
 			desc:           "test http body request streaming",
 			dest:           "/slow_echo_body",
-			connectionType: quicpogs.ConnectionTypeHTTP,
-			metadata: []quicpogs.Metadata{
+			connectionType: pogs.ConnectionTypeHTTP,
+			metadata: []pogs.Metadata{
 				{
 					Key: "HttpHeader:Cf-Ray",
 					Val: "123123123",
@@ -110,8 +109,8 @@ func TestQUICServer(t *testing.T) {
 		{
 			desc:           "test ws proxy",
 			dest:           "/ws/echo",
-			connectionType: quicpogs.ConnectionTypeWebsocket,
-			metadata: []quicpogs.Metadata{
+			connectionType: pogs.ConnectionTypeWebsocket,
+			metadata: []pogs.Metadata{
 				{
 					Key: "HttpHeader:Cf-Cloudflared-Proxy-Connection-Upgrade",
 					Val: "Websocket",
@@ -134,8 +133,8 @@ func TestQUICServer(t *testing.T) {
 		},
 		{
 			desc:             "test tcp proxy",
-			connectionType:   quicpogs.ConnectionTypeTCP,
-			metadata:         []quicpogs.Metadata{},
+			connectionType:   pogs.ConnectionTypeTCP,
+			metadata:         []pogs.Metadata{},
 			message:          []byte("Here is some tcp data"),
 			expectedResponse: []byte("Here is some tcp data"),
 		},
@@ -145,8 +144,14 @@ func TestQUICServer(t *testing.T) {
 		test := test // capture range variable
 		t.Run(test.desc, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
-
-			quicListener, err := quic.Listen(udpListener, testTLSServerConfig, testQUICConfig)
+			// Start a UDP Listener for QUIC.
+			udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+			require.NoError(t, err)
+			udpListener, err := net.ListenUDP(udpAddr.Network(), udpAddr)
+			require.NoError(t, err)
+			defer udpListener.Close()
+			quicTransport := &quic.Transport{Conn: udpListener, ConnectionIDLength: 16}
+			quicListener, err := quicTransport.Listen(testTLSServerConfig, testQUICConfig)
 			require.NoError(t, err)
 
 			serverDone := make(chan struct{})
@@ -176,7 +181,7 @@ type fakeControlStream struct {
 	ControlStreamHandler
 }
 
-func (fakeControlStream) ServeControlStream(ctx context.Context, rw io.ReadWriteCloser, connOptions *tunnelpogs.ConnectionOptions, tunnelConfigGetter TunnelConfigJSONGetter) error {
+func (fakeControlStream) ServeControlStream(ctx context.Context, rw io.ReadWriteCloser, connOptions *pogs.ConnectionOptions, tunnelConfigGetter TunnelConfigJSONGetter) error {
 	<-ctx.Done()
 	return nil
 }
@@ -187,10 +192,10 @@ func (fakeControlStream) IsStopped() bool {
 func quicServer(
 	ctx context.Context,
 	t *testing.T,
-	listener quic.Listener,
+	listener *quic.Listener,
 	dest string,
-	connectionType quicpogs.ConnectionType,
-	metadata []quicpogs.Metadata,
+	connectionType pogs.ConnectionType,
+	metadata []pogs.Metadata,
 	message []byte,
 	expectedResponse []byte,
 ) {
@@ -199,9 +204,9 @@ func quicServer(
 
 	quicStream, err := session.OpenStreamSync(context.Background())
 	require.NoError(t, err)
-	stream := quicpogs.NewSafeStreamCloser(quicStream)
+	stream := cfdquic.NewSafeStreamCloser(quicStream, defaultQUICTimeout, &log)
 
-	reqClientStream := quicpogs.RequestClientStream{ReadWriteCloser: stream}
+	reqClientStream := rpcquic.RequestClientStream{ReadWriteCloser: stream}
 	err = reqClientStream.WriteConnectRequestData(dest, connectionType, metadata...)
 	require.NoError(t, err)
 
@@ -266,15 +271,15 @@ func (moc *mockOriginProxyWithRequest) ProxyHTTP(w ResponseWriter, tr *tracing.T
 func TestBuildHTTPRequest(t *testing.T) {
 	var tests = []struct {
 		name           string
-		connectRequest *quicpogs.ConnectRequest
+		connectRequest *pogs.ConnectRequest
 		body           io.ReadCloser
 		req            *http.Request
 	}{
 		{
 			name: "check if http.Request is built correctly with content length",
-			connectRequest: &quicpogs.ConnectRequest{
+			connectRequest: &pogs.ConnectRequest{
 				Dest: "http://test.com",
-				Metadata: []quicpogs.Metadata{
+				Metadata: []pogs.Metadata{
 					{
 						Key: "HttpHeader:Cf-Cloudflared-Proxy-Connection-Upgrade",
 						Val: "Websocket",
@@ -318,9 +323,9 @@ func TestBuildHTTPRequest(t *testing.T) {
 		},
 		{
 			name: "if content length isn't part of request headers, then it's not set",
-			connectRequest: &quicpogs.ConnectRequest{
+			connectRequest: &pogs.ConnectRequest{
 				Dest: "http://test.com",
-				Metadata: []quicpogs.Metadata{
+				Metadata: []pogs.Metadata{
 					{
 						Key: "HttpHeader:Cf-Cloudflared-Proxy-Connection-Upgrade",
 						Val: "Websocket",
@@ -359,9 +364,9 @@ func TestBuildHTTPRequest(t *testing.T) {
 		},
 		{
 			name: "if content length is 0, but transfer-encoding is chunked, body is not nil",
-			connectRequest: &quicpogs.ConnectRequest{
+			connectRequest: &pogs.ConnectRequest{
 				Dest: "http://test.com",
-				Metadata: []quicpogs.Metadata{
+				Metadata: []pogs.Metadata{
 					{
 						Key: "HttpHeader:Another-Header",
 						Val: "Misc",
@@ -401,9 +406,9 @@ func TestBuildHTTPRequest(t *testing.T) {
 		},
 		{
 			name: "if content length is 0, but transfer-encoding is gzip,chunked, body is not nil",
-			connectRequest: &quicpogs.ConnectRequest{
+			connectRequest: &pogs.ConnectRequest{
 				Dest: "http://test.com",
-				Metadata: []quicpogs.Metadata{
+				Metadata: []pogs.Metadata{
 					{
 						Key: "HttpHeader:Another-Header",
 						Val: "Misc",
@@ -443,10 +448,10 @@ func TestBuildHTTPRequest(t *testing.T) {
 		},
 		{
 			name: "if content length is 0, and connect request is a websocket, body is not nil",
-			connectRequest: &quicpogs.ConnectRequest{
-				Type: quicpogs.ConnectionTypeWebsocket,
+			connectRequest: &pogs.ConnectRequest{
+				Type: pogs.ConnectionTypeWebsocket,
 				Dest: "http://test.com",
-				Metadata: []quicpogs.Metadata{
+				Metadata: []pogs.Metadata{
 					{
 						Key: "HttpHeader:Another-Header",
 						Val: "Misc",
@@ -618,12 +623,12 @@ func serveSession(ctx context.Context, qc *QUICConnection, edgeQUICSession quic.
 	}()
 
 	// Send a message to the quic session on edge side, it should be deumx to this datagram v2 session
-	muxedPayload, err := quicpogs.SuffixSessionID(sessionID, payload)
+	muxedPayload, err := cfdquic.SuffixSessionID(sessionID, payload)
 	require.NoError(t, err)
-	muxedPayload, err = quicpogs.SuffixType(muxedPayload, quicpogs.DatagramTypeUDP)
+	muxedPayload, err = cfdquic.SuffixType(muxedPayload, cfdquic.DatagramTypeUDP)
 	require.NoError(t, err)
 
-	err = edgeQUICSession.SendMessage(muxedPayload)
+	err = edgeQUICSession.SendDatagram(muxedPayload)
 	require.NoError(t, err)
 
 	readBuffer := make([]byte, len(payload)+1)
@@ -666,7 +671,7 @@ const (
 	closedByTimeout
 )
 
-func runRPCServer(ctx context.Context, session quic.Connection, sessionRPCServer tunnelpogs.SessionManager, configRPCServer tunnelpogs.ConfigurationManager, t *testing.T) {
+func runRPCServer(ctx context.Context, session quic.Connection, sessionRPCServer pogs.SessionManager, configRPCServer pogs.ConfigurationManager, t *testing.T) {
 	stream, err := session.AcceptStream(ctx)
 	require.NoError(t, err)
 
@@ -675,13 +680,15 @@ func runRPCServer(ctx context.Context, session quic.Connection, sessionRPCServer
 		stream, err = session.AcceptStream(ctx)
 		require.NoError(t, err)
 	}
-	protocol, err := quicpogs.DetermineProtocol(stream)
-	assert.NoError(t, err)
-	rpcServerStream, err := quicpogs.NewRPCServerStream(stream, protocol)
-	assert.NoError(t, err)
-
-	log := zerolog.New(os.Stdout)
-	err = rpcServerStream.Serve(sessionRPCServer, configRPCServer, &log)
+	ss := rpcquic.NewCloudflaredServer(
+		func(_ context.Context, _ *rpcquic.RequestServerStream) error {
+			return nil
+		},
+		sessionRPCServer,
+		configRPCServer,
+		10*time.Second,
+	)
+	err = ss.Serve(ctx, stream)
 	assert.NoError(t, err)
 }
 
@@ -713,7 +720,10 @@ func testQUICConnection(udpListenerAddr net.Addr, t *testing.T, index uint8) *QU
 	}
 	// Start a mock httpProxy
 	log := zerolog.New(os.Stdout)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	qc, err := NewQUICConnection(
+		ctx,
 		testQUICConfig,
 		udpListenerAddr,
 		nil,
@@ -724,6 +734,8 @@ func testQUICConnection(udpListenerAddr net.Addr, t *testing.T, index uint8) *QU
 		fakeControlStream{},
 		&log,
 		nil,
+		15*time.Second,
+		0*time.Second,
 	)
 	require.NoError(t, err)
 	return qc
@@ -739,4 +751,28 @@ func (m *mockReaderNoopWriter) Write(p []byte) (n int, err error) {
 
 func (m *mockReaderNoopWriter) Close() error {
 	return nil
+}
+
+// GenerateTLSConfig sets up a bare-bones TLS config for a QUIC server
+func GenerateTLSConfig() *tls.Config {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		panic(err)
+	}
+	template := x509.Certificate{SerialNumber: big.NewInt(1)}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		panic(err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		NextProtos:   []string{"argotunnel"},
+	}
 }

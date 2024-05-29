@@ -30,14 +30,13 @@ import (
 	"github.com/cloudflare/cloudflared/ingress"
 	"github.com/cloudflare/cloudflared/logger"
 	"github.com/cloudflare/cloudflared/tracing"
-	tunnelpogs "github.com/cloudflare/cloudflared/tunnelrpc/pogs"
+	"github.com/cloudflare/cloudflared/tunnelrpc/pogs"
 )
 
 var (
-	testTags        = []tunnelpogs.Tag{{Name: "Name", Value: "value"}}
+	testTags        = []pogs.Tag{{Name: "Name", Value: "value"}}
 	noWarpRouting   = ingress.WarpRoutingConfig{}
 	testWarpRouting = ingress.WarpRoutingConfig{
-		Enabled:        true,
 		ConnectTimeout: config.CustomDuration{Duration: time.Second},
 	}
 )
@@ -163,7 +162,7 @@ func TestProxySingleOrigin(t *testing.T) {
 
 	require.NoError(t, ingressRule.StartOrigins(&log, ctx.Done()))
 
-	proxy := NewOriginProxy(ingressRule, noWarpRouting, testTags, &log)
+	proxy := NewOriginProxy(ingressRule, noWarpRouting, testTags, time.Duration(0), &log)
 	t.Run("testProxyHTTP", testProxyHTTP(proxy))
 	t.Run("testProxyWebsocket", testProxyWebsocket(proxy))
 	t.Run("testProxySSE", testProxySSE(proxy))
@@ -367,7 +366,7 @@ func runIngressTestScenarios(t *testing.T, unvalidatedIngress []config.Unvalidat
 	ctx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, ingress.StartOrigins(&log, ctx.Done()))
 
-	proxy := NewOriginProxy(ingress, noWarpRouting, testTags, &log)
+	proxy := NewOriginProxy(ingress, noWarpRouting, testTags, time.Duration(0), &log)
 
 	for _, test := range tests {
 		responseWriter := newMockHTTPRespWriter()
@@ -415,7 +414,7 @@ func TestProxyError(t *testing.T) {
 
 	log := zerolog.Nop()
 
-	proxy := NewOriginProxy(ing, noWarpRouting, testTags, &log)
+	proxy := NewOriginProxy(ing, noWarpRouting, testTags, time.Duration(0), &log)
 
 	responseWriter := newMockHTTPRespWriter()
 	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1", nil)
@@ -531,7 +530,7 @@ func TestConnections(t *testing.T) {
 				originService:         runEchoTCPService,
 				eyeballResponseWriter: newTCPRespWriter(replayer),
 				eyeballRequestBody:    newTCPRequestBody([]byte("test2")),
-				warpRoutingService:    ingress.NewWarpRoutingService(testWarpRouting),
+				warpRoutingService:    ingress.NewWarpRoutingService(testWarpRouting, time.Duration(0)),
 				connectionType:        connection.TypeTCP,
 				requestHeaders: map[string][]string{
 					"Cf-Cloudflared-Proxy-Src": {"non-blank-value"},
@@ -549,7 +548,7 @@ func TestConnections(t *testing.T) {
 				originService:        runEchoWSService,
 				// eyeballResponseWriter gets set after roundtrip dial.
 				eyeballRequestBody: newPipedWSRequestBody([]byte("test3")),
-				warpRoutingService: ingress.NewWarpRoutingService(testWarpRouting),
+				warpRoutingService: ingress.NewWarpRoutingService(testWarpRouting, time.Duration(0)),
 				requestHeaders: map[string][]string{
 					"Cf-Cloudflared-Proxy-Src": {"non-blank-value"},
 				},
@@ -676,7 +675,7 @@ func TestConnections(t *testing.T) {
 
 			ingressRule := createSingleIngressConfig(t, test.args.ingressServiceScheme+ln.Addr().String())
 			ingressRule.StartOrigins(logger, ctx.Done())
-			proxy := NewOriginProxy(ingressRule, testWarpRouting, testTags, logger)
+			proxy := NewOriginProxy(ingressRule, testWarpRouting, testTags, time.Duration(0), logger)
 			proxy.warpRouting = test.args.warpRoutingService
 
 			dest := ln.Addr().String()
@@ -698,7 +697,7 @@ func TestConnections(t *testing.T) {
 				}()
 			}
 			if test.args.connectionType == connection.TypeTCP {
-				rwa := connection.NewHTTPResponseReadWriterAcker(respWriter, req)
+				rwa := connection.NewHTTPResponseReadWriterAcker(respWriter, respWriter.(http.Flusher), req)
 				err = proxy.ProxyTCP(ctx, rwa, &connection.TCPRequest{Dest: dest})
 			} else {
 				log := zerolog.Nop()
@@ -834,6 +833,8 @@ func (w *wsRespWriter) WriteRespHeaders(status int, header http.Header) error {
 	return nil
 }
 
+func (w *wsRespWriter) Flush() {}
+
 func (w *wsRespWriter) AddTrailer(trailerName, trailerValue string) {
 	// do nothing
 }
@@ -872,6 +873,8 @@ func (m *mockTCPRespWriter) Read(p []byte) (n int, err error) {
 func (m *mockTCPRespWriter) Write(p []byte) (n int, err error) {
 	return m.w.Write(p)
 }
+
+func (m *mockTCPRespWriter) Flush() {}
 
 func (m *mockTCPRespWriter) AddTrailer(trailerName, trailerValue string) {
 	// do nothing

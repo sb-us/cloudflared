@@ -14,13 +14,13 @@ import (
 	"github.com/cloudflare/cloudflared/connection"
 	"github.com/cloudflare/cloudflared/ingress"
 	"github.com/cloudflare/cloudflared/proxy"
-	tunnelpogs "github.com/cloudflare/cloudflared/tunnelrpc/pogs"
+	"github.com/cloudflare/cloudflared/tunnelrpc/pogs"
 )
 
-// Orchestrator manages configurations so they can be updatable during runtime
+// Orchestrator manages configurations, so they can be updatable during runtime
 // properties are static, so it can be read without lock
 // currentVersion and config are read/write infrequently, so their access are synchronized with RWMutex
-// access to proxy is synchronized with atmoic.Value, because it uses copy-on-write to provide scalable frequently
+// access to proxy is synchronized with atomic.Value, because it uses copy-on-write to provide scalable frequently
 // read when update is infrequent
 type Orchestrator struct {
 	currentVersion int32
@@ -28,12 +28,12 @@ type Orchestrator struct {
 	lock sync.RWMutex
 	// Underlying value is proxy.Proxy, can be read without the lock, but still needs the lock to update
 	proxy atomic.Value
-	// Set of local ingress rules defined at cloudflared startup (separate from user-defined ingress rules)
-	localRules         []ingress.Rule
-	warpRoutingEnabled atomic.Bool
-	config             *Config
-	tags               []tunnelpogs.Tag
-	log                *zerolog.Logger
+	// Set of internal ingress rules defined at cloudflared startup (separate from user-defined ingress rules)
+	internalRules []ingress.Rule
+	// cloudflared Configuration
+	config *Config
+	tags   []pogs.Tag
+	log    *zerolog.Logger
 
 	// orchestrator must not handle any more updates after shutdownC is closed
 	shutdownC <-chan struct{}
@@ -41,11 +41,17 @@ type Orchestrator struct {
 	proxyShutdownC chan<- struct{}
 }
 
-func NewOrchestrator(ctx context.Context, config *Config, tags []tunnelpogs.Tag, localRules []ingress.Rule, log *zerolog.Logger) (*Orchestrator, error) {
+func NewOrchestrator(ctx context.Context,
+	config *Config,
+	tags []pogs.Tag,
+	internalRules []ingress.Rule,
+	log *zerolog.Logger) (*Orchestrator, error) {
 	o := &Orchestrator{
 		// Lowest possible version, any remote configuration will have version higher than this
-		currentVersion: 0,
-		localRules:     localRules,
+		// Starting at -1 allows a configuration migration (local to remote) to override the current configuration as it
+		// will start at version 0.
+		currentVersion: -1,
+		internalRules:  internalRules,
 		config:         config,
 		tags:           tags,
 		log:            log,
@@ -59,7 +65,7 @@ func NewOrchestrator(ctx context.Context, config *Config, tags []tunnelpogs.Tag,
 }
 
 // UpdateConfig creates a new proxy with the new ingress rules
-func (o *Orchestrator) UpdateConfig(version int32, config []byte) *tunnelpogs.UpdateConfigurationResponse {
+func (o *Orchestrator) UpdateConfig(version int32, config []byte) *pogs.UpdateConfigurationResponse {
 	o.lock.Lock()
 	defer o.lock.Unlock()
 
@@ -68,7 +74,7 @@ func (o *Orchestrator) UpdateConfig(version int32, config []byte) *tunnelpogs.Up
 			Int32("current_version", o.currentVersion).
 			Int32("received_version", version).
 			Msg("Current version is equal or newer than received version")
-		return &tunnelpogs.UpdateConfigurationResponse{
+		return &pogs.UpdateConfigurationResponse{
 			LastAppliedVersion: o.currentVersion,
 		}
 	}
@@ -78,7 +84,7 @@ func (o *Orchestrator) UpdateConfig(version int32, config []byte) *tunnelpogs.Up
 			Int32("version", version).
 			Str("config", string(config)).
 			Msgf("Failed to deserialize new configuration")
-		return &tunnelpogs.UpdateConfigurationResponse{
+		return &pogs.UpdateConfigurationResponse{
 			LastAppliedVersion: o.currentVersion,
 			Err:                err,
 		}
@@ -89,7 +95,7 @@ func (o *Orchestrator) UpdateConfig(version int32, config []byte) *tunnelpogs.Up
 			Int32("version", version).
 			Str("config", string(config)).
 			Msgf("Failed to update ingress")
-		return &tunnelpogs.UpdateConfigurationResponse{
+		return &pogs.UpdateConfigurationResponse{
 			LastAppliedVersion: o.currentVersion,
 			Err:                err,
 		}
@@ -101,7 +107,7 @@ func (o *Orchestrator) UpdateConfig(version int32, config []byte) *tunnelpogs.Up
 		Str("config", string(config)).
 		Msg("Updated to new configuration")
 	configVersion.Set(float64(version))
-	return &tunnelpogs.UpdateConfigurationResponse{
+	return &pogs.UpdateConfigurationResponse{
 		LastAppliedVersion: o.currentVersion,
 	}
 }
@@ -114,8 +120,13 @@ func (o *Orchestrator) updateIngress(ingressRules ingress.Ingress, warpRouting i
 	default:
 	}
 
-	// Assign the local ingress rules to the parsed ingress
-	ingressRules.LocalRules = o.localRules
+	// Assign the internal ingress rules to the parsed ingress
+	ingressRules.InternalRules = o.internalRules
+
+	// Check if ingress rules are empty, and add the default route if so.
+	if ingressRules.IsEmpty() {
+		ingressRules.Rules = ingress.GetDefaultIngressRules(o.log)
+	}
 
 	// Start new proxy before closing the ones from last version.
 	// The upside is we don't need to restart proxy from last version, which can fail
@@ -125,15 +136,10 @@ func (o *Orchestrator) updateIngress(ingressRules ingress.Ingress, warpRouting i
 	if err := ingressRules.StartOrigins(o.log, proxyShutdownC); err != nil {
 		return errors.Wrap(err, "failed to start origin")
 	}
-	proxy := proxy.NewOriginProxy(ingressRules, warpRouting, o.tags, o.log)
+	proxy := proxy.NewOriginProxy(ingressRules, warpRouting, o.tags, o.config.WriteTimeout, o.log)
 	o.proxy.Store(proxy)
 	o.config.Ingress = &ingressRules
 	o.config.WarpRouting = warpRouting
-	if warpRouting.Enabled {
-		o.warpRoutingEnabled.Store(true)
-	} else {
-		o.warpRoutingEnabled.Store(false)
-	}
 
 	// If proxyShutdownC is nil, there is no previous running proxy
 	if o.proxyShutdownC != nil {
@@ -200,10 +206,6 @@ func (o *Orchestrator) GetOriginProxy() (connection.OriginProxy, error) {
 		return nil, err
 	}
 	return proxy, nil
-}
-
-func (o *Orchestrator) WarpRoutingEnabled() bool {
-	return o.warpRoutingEnabled.Load()
 }
 
 func (o *Orchestrator) waitToCloseLastProxy() {

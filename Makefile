@@ -1,3 +1,6 @@
+# The targets cannot be run in parallel
+.NOTPARALLEL:
+
 VERSION       := $(shell git describe --tags --always --match "[0-9][0-9][0-9][0-9].*.*")
 MSI_VERSION   := $(shell git tag -l --sort=v:refname | grep "w" | tail -1 | cut -c2-)
 #MSI_VERSION expects the format of the tag to be: (wX.X.X). Starts with the w character to not break cfsetup.
@@ -49,6 +52,8 @@ PACKAGE_DIR    := $(CURDIR)/packaging
 PREFIX         := /usr
 INSTALL_BINDIR := $(PREFIX)/bin/
 INSTALL_MANDIR := $(PREFIX)/share/man/man1/
+CF_GO_PATH     := /tmp/go
+PATH           := $(CF_GO_PATH)/bin:$(PATH)
 
 LOCAL_ARCH ?= $(shell uname -m)
 ifneq ($(GOARCH),)
@@ -126,7 +131,7 @@ ifeq ($(FIPS), true)
 	$(info Building cloudflared with go-fips)
 	cp -f fips/fips.go.linux-amd64 cmd/cloudflared/fips.go
 endif
-	GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) $(ARM_COMMAND) go build -v -mod=vendor $(GO_BUILD_TAGS) $(LDFLAGS) $(IMPORT_PATH)/cmd/cloudflared
+	GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) $(ARM_COMMAND) go build -mod=vendor $(GO_BUILD_TAGS) $(LDFLAGS) $(IMPORT_PATH)/cmd/cloudflared
 ifeq ($(FIPS), true)
 	rm -f cmd/cloudflared/fips.go
 	./check-fips.sh cloudflared
@@ -140,6 +145,7 @@ container:
 generate-docker-version:
 	echo latest $(VERSION) > versions
 
+
 .PHONY: test
 test: vet
 ifndef CI
@@ -147,17 +153,35 @@ ifndef CI
 else
 	@mkdir -p .cover
 	go test -v -mod=vendor -race $(LDFLAGS) -coverprofile=".cover/c.out" ./...
-	go tool cover -html ".cover/c.out" -o .cover/all.html
 endif
+
+.PHONY: cover
+cover:
+	@echo ""
+	@echo "=====> Total test coverage: <====="
+	@echo ""
+	# Print the overall coverage here for quick access.
+	$Q go tool cover -func ".cover/c.out" | grep "total:" | awk '{print $$3}'
+	# Generate the HTML report that can be viewed from the browser in CI.
+	$Q go tool cover -html ".cover/c.out" -o .cover/all.html
 
 .PHONY: test-ssh-server
 test-ssh-server:
 	docker-compose -f ssh_server_tests/docker-compose.yml up
 
+.PHONY: install-go
+install-go:
+	rm -rf ${CF_GO_PATH}
+	./.teamcity/install-cloudflare-go.sh
+
+.PHONY: cleanup-go
+cleanup-go:
+	rm -rf ${CF_GO_PATH}
+
 cloudflared.1: cloudflared_man_template
 	sed -e 's/\$${VERSION}/$(VERSION)/; s/\$${DATE}/$(DATE)/' cloudflared_man_template > cloudflared.1
 
-install: cloudflared cloudflared.1
+install: install-go cloudflared cloudflared.1 cleanup-go
 	mkdir -p $(DESTDIR)$(INSTALL_BINDIR) $(DESTDIR)$(INSTALL_MANDIR)
 	install -m755 cloudflared $(DESTDIR)$(INSTALL_BINDIR)/cloudflared
 	install -m644 cloudflared.1 $(DESTDIR)$(INSTALL_MANDIR)/cloudflared.1
@@ -199,67 +223,6 @@ cloudflared-darwin-amd64.tgz: cloudflared
 	tar czf cloudflared-darwin-amd64.tgz cloudflared
 	rm cloudflared
 
-.PHONY: cloudflared-junos
-cloudflared-junos: cloudflared jetez-certificate.pem jetez-key.pem
-	jetez --source . \
-		  -j jet.yaml \
-		  --key jetez-key.pem \
-		  --cert jetez-certificate.pem \
-		  --version $(VERSION)
-	rm jetez-*.pem
-
-jetez-certificate.pem:
-ifndef JETEZ_CERT
-	$(error JETEZ_CERT not defined)
-endif
-	@echo "Writing JetEZ certificate"
-	@echo "$$JETEZ_CERT" > jetez-certificate.pem
-
-jetez-key.pem:
-ifndef JETEZ_KEY
-	$(error JETEZ_KEY not defined)
-endif
-	@echo "Writing JetEZ key"
-	@echo "$$JETEZ_KEY" > jetez-key.pem
-
-.PHONY: publish-cloudflared-junos
-publish-cloudflared-junos: cloudflared-junos cloudflared-x86-64.latest.s3
-ifndef S3_ENDPOINT
-	$(error S3_HOST not defined)
-endif
-ifndef S3_URI
-	$(error S3_URI not defined)
-endif
-ifndef S3_ACCESS_KEY
-	$(error S3_ACCESS_KEY not defined)
-endif
-ifndef S3_SECRET_KEY
-	$(error S3_SECRET_KEY not defined)
-endif
-	sha256sum cloudflared-x86-64-$(VERSION).tgz | awk '{printf $$1}' > cloudflared-x86-64-$(VERSION).tgz.shasum
-	s4cmd --endpoint-url $(S3_ENDPOINT) --force --API-GrantRead=uri=http://acs.amazonaws.com/groups/global/AllUsers \
-		put cloudflared-x86-64-$(VERSION).tgz $(S3_URI)/cloudflared-x86-64-$(VERSION).tgz
-	s4cmd --endpoint-url $(S3_ENDPOINT) --force --API-GrantRead=uri=http://acs.amazonaws.com/groups/global/AllUsers \
-		put cloudflared-x86-64-$(VERSION).tgz.shasum $(S3_URI)/cloudflared-x86-64-$(VERSION).tgz.shasum
-	dpkg --compare-versions "$(VERSION)" gt "$(shell cat cloudflared-x86-64.latest.s3)" && \
-		echo -n "$(VERSION)" > cloudflared-x86-64.latest && \
-		s4cmd --endpoint-url $(S3_ENDPOINT) --force --API-GrantRead=uri=http://acs.amazonaws.com/groups/global/AllUsers \
-			put cloudflared-x86-64.latest $(S3_URI)/cloudflared-x86-64.latest || \
-		echo "Latest version not updated"
-
-cloudflared-x86-64.latest.s3:
-	s4cmd --endpoint-url $(S3_ENDPOINT) --force \
-		get $(S3_URI)/cloudflared-x86-64.latest cloudflared-x86-64.latest.s3
-
-.PHONY: homebrew-upload
-homebrew-upload: cloudflared-darwin-amd64.tgz
-	aws s3 --endpoint-url $(S3_ENDPOINT) cp --acl public-read $$^ $(S3_URI)/cloudflared-$$(VERSION)-$1.tgz
-	aws s3 --endpoint-url $(S3_ENDPOINT) cp --acl public-read $(S3_URI)/cloudflared-$$(VERSION)-$1.tgz  $(S3_URI)/cloudflared-stable-$1.tgz
-
-.PHONY: homebrew-release
-homebrew-release: homebrew-upload
-	./publish-homebrew-formula.sh cloudflared-darwin-amd64.tgz $(VERSION) homebrew-cloudflare
-
 .PHONY: github-release
 github-release: cloudflared
 	python3 github_release.py --path $(EXECUTABLE_PATH) --release-version $(VERSION)
@@ -288,22 +251,16 @@ github-windows-upload:
 	python3 github_release.py --path built_artifacts/cloudflared-windows-386.exe --release-version $(VERSION) --name cloudflared-windows-386.exe
 	python3 github_release.py --path built_artifacts/cloudflared-windows-386.msi --release-version $(VERSION) --name cloudflared-windows-386.msi
 
-.PHONY: tunnelrpc-deps
-tunnelrpc-deps:
+.PHONY: capnp
+capnp:
 	which capnp  # https://capnproto.org/install.html
 	which capnpc-go  # go install zombiezen.com/go/capnproto2/capnpc-go@latest
-	capnp compile -ogo tunnelrpc/tunnelrpc.capnp
-
-.PHONY: quic-deps
-quic-deps:
-	which capnp
-	which capnpc-go
-	capnp compile -ogo quic/schema/quic_metadata_protocol.capnp
+	capnp compile -ogo tunnelrpc/proto/tunnelrpc.capnp tunnelrpc/proto/quic_metadata_protocol.capnp
 
 .PHONY: vet
 vet:
-	go vet -v -mod=vendor github.com/cloudflare/cloudflared/...
+	go vet -mod=vendor github.com/cloudflare/cloudflared/...
 
 .PHONY: fmt
 fmt:
-	goimports -l -w -local github.com/cloudflare/cloudflared $$(go list -mod=vendor -f '{{.Dir}}' -a ./... | fgrep -v tunnelrpc)
+	goimports -l -w -local github.com/cloudflare/cloudflared $$(go list -mod=vendor -f '{{.Dir}}' -a ./... | fgrep -v tunnelrpc/proto)

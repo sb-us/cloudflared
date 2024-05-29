@@ -40,10 +40,9 @@ type Orchestrator interface {
 	UpdateConfig(version int32, config []byte) *pogs.UpdateConfigurationResponse
 	GetConfigJSON() ([]byte, error)
 	GetOriginProxy() (OriginProxy, error)
-	WarpRoutingEnabled() (enabled bool)
 }
 
-type NamedTunnelProperties struct {
+type TunnelProperties struct {
 	Credentials    Credentials
 	Client         pogs.ClientInfo
 	QuickTunnelUrl string
@@ -157,14 +156,16 @@ type ReadWriteAcker interface {
 type HTTPResponseReadWriteAcker struct {
 	r   io.Reader
 	w   ResponseWriter
+	f   http.Flusher
 	req *http.Request
 }
 
 // NewHTTPResponseReadWriterAcker returns a new instance of HTTPResponseReadWriteAcker.
-func NewHTTPResponseReadWriterAcker(w ResponseWriter, req *http.Request) *HTTPResponseReadWriteAcker {
+func NewHTTPResponseReadWriterAcker(w ResponseWriter, flusher http.Flusher, req *http.Request) *HTTPResponseReadWriteAcker {
 	return &HTTPResponseReadWriteAcker{
 		r:   req.Body,
 		w:   w,
+		f:   flusher,
 		req: req,
 	}
 }
@@ -174,7 +175,11 @@ func (h *HTTPResponseReadWriteAcker) Read(p []byte) (int, error) {
 }
 
 func (h *HTTPResponseReadWriteAcker) Write(p []byte) (int, error) {
-	return h.w.Write(p)
+	n, err := h.w.Write(p)
+	if n > 0 {
+		h.f.Flush()
+	}
+	return n, err
 }
 
 // AckConnection acks an HTTP connection by sending a switch protocols status code that enables the caller to
