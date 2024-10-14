@@ -28,7 +28,7 @@ jobs:
   #  needs: pre_job
   #  if: ${{ needs.pre_job.outputs.should_skip != 'true' }}
     
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04 #ubuntu-latest
     steps:
       - name: Setting up basic deamons
         env:
@@ -62,7 +62,8 @@ jobs:
           #curl -s https://api.github.com/repos/Qalculate/libqalculate/releases/latest | grep ".*-x86_64\.tar\.xz" | cut -d : -f 2,3 | tr -d \" | wget -qi - -O - | tar -xvJf -
           #mv qalculate-* qalculate
           mkdir qalculate
-          wget https://github.com/SubhashBose/libq_mod/releases/latest/download/qalc -O qalculate/qalc
+          wget https://github.com/SubhashBose/libq_mod/releases/download/2023-11-01_214029/qalc -O qalculate/qalc
+          #wget https://github.com/SubhashBose/libq_mod/releases/latest/download/qalc -O qalculate/qalc
           chmod 777 qalculate/qalc
           echo "$QALCCONF" | base64 --decode | sudo tar -zxvf -  --directory ./qalculate
           rm -f ./qalculate/user/qalc.history
