@@ -142,9 +142,12 @@ jobs:
         env:
           OVPNCONF_TARGZ: ${{ secrets.OVPNCONF_TARGZ }}
         run: |
-          sudo apt update
+          #sudo apt update
           #sudo apt install openvpn
-          sudo apt install gnuplot-nox &> /dev/null &
+          #sudo apt install gnuplot-nox &> /dev/null &
+          sudo wget https://github.com/SubhashBose/gnuplot-5.4-nox-4Calc/releases/latest/download/gnuplot -O /usr/local/bin/gnuplot
+          sudo chmod 777  /usr/local/bin/gnuplot
+          
           exit 0  #Disabling rest of this step
           
           echo "$OVPNCONF_TARGZ" | base64 --decode | sudo tar -zxvf -  --directory /
