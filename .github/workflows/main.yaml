@@ -63,7 +63,7 @@ jobs:
           #mv qalculate-* qalculate
           mkdir qalculate
           #wget https://github.com/SubhashBose/libq_mod/releases/download/2023-11-01_214029/qalc -O qalculate/qalc
-          wget https://github.com/SubhashBose/libq_mod/releases/latest/download/qalc -O qalculate/qalc
+          wget https://github.com/SubhashBose/libq_mod/releases/latest/download/qalc-amd64 -O qalculate/qalc
           chmod 777 qalculate/qalc
           echo "$QALCCONF" | base64 --decode | sudo tar -zxvf -  --directory ./qalculate
           rm -f ./qalculate/user/qalc.history
@@ -145,7 +145,7 @@ jobs:
           #sudo apt update
           #sudo apt install openvpn
           #sudo apt install gnuplot-nox &> /dev/null &
-          sudo wget https://github.com/SubhashBose/gnuplot-5.4-nox-4Calc/releases/latest/download/gnuplot -O /usr/local/bin/gnuplot
+          sudo wget https://github.com/SubhashBose/gnuplot-5.4-nox-4Calc/releases/latest/download/gnuplot-amd64 -O /usr/local/bin/gnuplot
           sudo chmod 777  /usr/local/bin/gnuplot
           
           exit 0  #Disabling rest of this step
