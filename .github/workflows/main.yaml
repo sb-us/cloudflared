@@ -188,7 +188,7 @@ jobs:
           sleep $(( $(cat deamons/runtime.const) - 120 )) || sudo find /dev/pts/ -type c -name "[0-9]*" -exec bash -c 'echo -e "\n\e[1;93mNotice: Initiating unplanned maintainance reboot by Admin.\e[0m" > {}' \;
           sudo find /dev/pts/ -type c -name "[0-9]*" -exec bash -c 'echo -e "\n\e[1;92mNotice: System is going to reset in 2 minutes.\e[0m" > {}' \;
           sleep 120 || echo ''
-          sudo find /dev/pts/ -type c -name "[0-9]*" -exec bash -c 'echo -e "\nNow system is resetting. Try reconnecting after 15 seconds." > {}' \;
+          sudo find /dev/pts/ -type c -name "[0-9]*" -exec bash -c 'echo -e "\nNow system is resetting. Try reconnecting after 10 seconds." > {}' \;
           ps -ax | grep "bash -c while" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./cfd" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
           ps -ax | grep "\./td" | grep -v "grep" | awk '{print $1}' | xargs -n1 kill || echo ''
