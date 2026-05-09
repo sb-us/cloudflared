@@ -119,6 +119,7 @@ jobs:
           echo -e "Use \"${fun}help${rst} NAME\" or \"${fun}info${rst} NAME\" with a function NAME to get detail help."
           echo -e "Use \"${fun}find${rst} PARTIAL_NAME\" to search function, constants, units."
           echo ""
+          stty intr undef
           ${qalc_basedir}/qalc "$@" 2> /dev/null
           fi
           ' > calc
