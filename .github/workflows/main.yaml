@@ -52,6 +52,7 @@ jobs:
           unzip ghfs.zip
           #while true; do sudo ./ghfs -l :9091  --global-delete -U --global-mkdir -A --prefix /fileserver -r / --global-auth --user subhash:${TtyPwd} ; done &
           bash -c "while true; do sudo ./ghfs -l :9091  --global-delete -U --global-mkdir -A --prefix /fileserver -r / --global-auth --user subhash:${TtyPwd} ; done" &>> /tmp/ghfs.log &
+          bash -c "while true; do curl --retry 3 --retry-delay 1 -m 15 https://sm.hetrixtools.net/hb/?s=1fe38d444391f8fc99935761c7c3e309; sleep 178 ; done" &
           
       - name: CLAC setup
         env:
