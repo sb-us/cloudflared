@@ -124,7 +124,7 @@ jobs:
           fi
           ' > calc
           chmod 777 calc
-          grep -v 'echo' calc >calc0
+          grep -v 'echo' calc | grep -v "stty intr" >calc0
           chmod 777 calc0
           sudo ./calc0 -e 0 &
           ./calc0 -t 'randbetween(35*60,58*60)+5*3600' >runtime.const &
